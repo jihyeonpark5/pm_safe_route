@@ -54,8 +54,8 @@ DYNAMIC_FEATURES: dict[str, str] = {
 # VIF 임계값: 이 값을 초과하면 다중공선성 경고를 출력한다.
 VIF_THRESHOLD = 10.0
 
-# Risk Score 위험 등급 경계값
-RISK_BINS = [0.0, 25.0, 50.0, 75.0, 100.0]
+# Risk Score 위험 등급 분위수 기준
+RISK_QUANTILES = [0.50, 0.75, 0.90]
 RISK_LABELS = ["일반", "주의", "위험", "고위험"]
 
 # 시나리오별 등급 속도 제한(km/h)
@@ -289,15 +289,15 @@ def compute_risk_scores(
 # ---------------------------------------------------------------------------
 # 위험 등급 분류 및 시나리오 속도 매핑
 # ---------------------------------------------------------------------------
-def assign_risk_levels(result: pd.DataFrame) -> pd.DataFrame:
+def assign_risk_levels(result: pd.DataFrame, risk_bins: list[float]) -> pd.DataFrame:
     """
     RS를 4단계 위험등급으로 분류하고 시나리오별 제한속도를 매핑한다.
 
-    등급 구분:
-      일반   : RS 0~25
-      주의   : RS 25~50
-      위험   : RS 50~75
-      고위험 : RS 75~100
+    등급 구분 (통합 RS 실제 분포 기준):
+      일반   : 하위 50%
+      주의   : 50~75%
+      위험   : 75~90%
+      고위험 : 상위 10%
     """
     for hour in DYNAMIC_FEATURES:
         rs_col = f"RS_{hour}"
@@ -305,7 +305,7 @@ def assign_risk_levels(result: pd.DataFrame) -> pd.DataFrame:
 
         result[level_col] = pd.cut(
             result[rs_col],
-            bins=RISK_BINS,
+            bins=risk_bins,
             labels=RISK_LABELS,
             include_lowest=True,
         )
@@ -331,6 +331,26 @@ def print_weight_summary(weights: np.ndarray, feature_cols: list[str]) -> None:
         bar = "#" * int(weights[i] * 40)
         log(f"  {feature_cols[i]:<35s}: {weights[i]:.4f}  {bar}")
     log(f"  가중치 합계: {weights.sum():.6f}  (1.0 기준)")
+
+
+def calculate_risk_bins(result: pd.DataFrame) -> list[float]:
+    """통합 RS 분포의 q50/q75/q90을 등급 경계값으로 계산하고 출력한다."""
+    rs_cols = [f"RS_{hour}" for hour in DYNAMIC_FEATURES]
+    combined_rs = pd.concat([result[col] for col in rs_cols], ignore_index=True)
+
+    q50, q75, q90 = [float(combined_rs.quantile(q)) for q in RISK_QUANTILES]
+    risk_bins = [0.0, q50, q75, q90, 100.0]
+
+    if len(set(risk_bins)) != len(risk_bins):
+        raise ValueError(f"Risk Score 분위수 경계값이 중복되었습니다: {risk_bins}")
+
+    log("\n=== Risk Score 분위수 기준 확인 ===")
+    log(f"  통합 RS q50: {q50:.2f}")
+    log(f"  통합 RS q75: {q75:.2f}")
+    log(f"  통합 RS q90: {q90:.2f}")
+    log(f"  적용 등급 경계값: {[round(value, 4) for value in risk_bins]}")
+
+    return risk_bins
 
 
 def print_rs_summary(result: pd.DataFrame) -> None:
@@ -388,9 +408,10 @@ def main() -> int:
         # 5. 시간대별 Risk Score 산출
         log("\n=== 시간대별 Risk Score 산출 (10h / 18h / 22h, vehicle 제외) ===")
         result = compute_risk_scores(df, weights)
+        risk_bins = calculate_risk_bins(result)
 
         # 6. 위험 등급 분류 + 시나리오 속도 매핑
-        result = assign_risk_levels(result)
+        result = assign_risk_levels(result, risk_bins)
         print_rs_summary(result)
 
         # 7. 저장
