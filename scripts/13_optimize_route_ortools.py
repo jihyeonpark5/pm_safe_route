@@ -3,9 +3,12 @@ from __future__ import annotations
 import argparse
 import csv
 import heapq
+import hashlib
+import json
 import math
 import os
 import re
+import ast
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,11 +40,33 @@ NODES_PATH = PROCESSED_DIR / "04_osm_nodes_raw.parquet"
 ADDRESS_CACHE_PATH = PROCESSED_DIR / "address_coordinate_cache.csv"
 
 DEFAULT_SCENARIO = "S1"
-DEFAULT_LAMBDAS = [0.0, 0.5, 1.0]
+SCENARIO_SPEED_LIMITS = {
+    "S0": {"normal": 25.0, "caution": 25.0, "risk": 25.0, "high_risk": 25.0},
+    "S1": {"normal": 25.0, "caution": 20.0, "risk": 15.0, "high_risk": 10.0},
+    "S2": {"normal": 20.0, "caution": 15.0, "risk": 10.0, "high_risk": 7.0},
+}
+DEFAULT_LAMBDAS = [round(step / 10.0, 1) for step in range(11)]
 DEFAULT_SUBGRAPH_MODE = "extreme_paths"
-SUBGRAPH_RADIUS_RATIO = 1.25
+SUBGRAPH_RADIUS_RATIO = 1.6
+SUBGRAPH_CORRIDOR_LAMBDAS = [0.0, 0.25, 0.5, 0.75, 1.0]
+SUBGRAPH_BUFFER_M = 180.0
 COST_SCALE = 1_000_000
 TARGET_CRS = "EPSG:5179"
+ROBUST_NORM_QUANTILE = 0.95
+HIGH_RISK_FIXED_PENALTY = 70.0
+ADVANCED_PENALTY_WEIGHT = 0.42
+SHORT_EDGE_THRESHOLD_M = 35.0
+TURN_COMPLEXITY_FACTOR = 1.15
+TURN_PENALTY_SCALE = 0.24
+TURN_FREE_ANGLE_DEG = 22.0
+UTURN_ANGLE_DEG = 150.0
+UTURN_PENALTY_MULTIPLIER = 1.8
+RISK_LEVEL_PENALTIES = {
+    "normal": 0.0,
+    "caution": 5.0,
+    "risk": 22.0,
+    "high_risk": HIGH_RISK_FIXED_PENALTY,
+}
 
 HOUR_LABELS = {
     "10h": "10:00",
@@ -81,19 +106,53 @@ ROUTE_COLORS = {
     1.0: "#d62728",
 }
 ROUTE_LINESTYLES = {
-    0.0: "solid",
-    0.5: "dashed",
-    1.0: "solid",
+    0.0: (0, (3, 3)),
+    0.5: (0, (1.4, 2.2)),
+    1.0: (0, (5, 2, 1.4, 2)),
 }
 ROUTE_LINEWIDTHS = {
-    0.0: 6.2,
-    0.5: 3.0,
-    1.0: 4.2,
+    0.0: 4.8,
+    0.5: 3.8,
+    1.0: 3.2,
 }
 ROUTE_ZORDERS = {
-    0.0: 4,
-    0.5: 6,
-    1.0: 5,
+    0.0: 7,
+    0.5: 5,
+    1.0: 6,
+}
+MAP_BACKGROUND = "#f5f3ee"
+ROAD_STYLE_ORDER = ["trunk", "primary", "secondary", "tertiary", "local", "service", "path", "other"]
+ROAD_STYLE_CONFIG = {
+    "trunk": {"fill": "#f7c66b", "casing": "#d8a14c", "fill_width": 3.8, "casing_width": 5.6, "alpha": 0.95},
+    "primary": {"fill": "#f5d58a", "casing": "#d5b46b", "fill_width": 3.2, "casing_width": 4.8, "alpha": 0.94},
+    "secondary": {"fill": "#f4dfaa", "casing": "#ceb989", "fill_width": 2.5, "casing_width": 3.9, "alpha": 0.93},
+    "tertiary": {"fill": "#fbf2d2", "casing": "#d4c7a8", "fill_width": 1.8, "casing_width": 2.8, "alpha": 0.92},
+    "local": {"fill": "#ffffff", "casing": "#dad7d2", "fill_width": 1.25, "casing_width": 2.0, "alpha": 0.96},
+    "service": {"fill": "#f8f7f3", "casing": "#d8d4cb", "fill_width": 0.9, "casing_width": 1.45, "alpha": 0.94},
+    "path": {"fill": "#efe9dc", "casing": "#cec5b6", "fill_width": 0.65, "casing_width": 1.0, "alpha": 0.88},
+    "other": {"fill": "#f3f0ea", "casing": "#ddd8cf", "fill_width": 0.8, "casing_width": 1.3, "alpha": 0.9},
+}
+ROAD_CLASS_LOOKUP = {
+    "motorway": "trunk",
+    "motorway_link": "trunk",
+    "trunk": "trunk",
+    "trunk_link": "trunk",
+    "primary": "primary",
+    "primary_link": "primary",
+    "secondary": "secondary",
+    "secondary_link": "secondary",
+    "tertiary": "tertiary",
+    "tertiary_link": "tertiary",
+    "residential": "local",
+    "living_street": "local",
+    "unclassified": "local",
+    "cycleway": "path",
+    "footway": "path",
+    "pedestrian": "path",
+    "path": "path",
+    "steps": "path",
+    "track": "path",
+    "service": "service",
 }
 
 
@@ -117,10 +176,16 @@ class Arc:
     edge_id: str
     length_m: float
     time_sec: float
+    rs_value: float
     risk_cost: float
+    comfort_cost: float
     time_norm: float
     risk_norm: float
+    comfort_norm: float
     risk_level: str
+    road_class: str
+    start_heading_deg: float
+    end_heading_deg: float
     geometry: object
 
 
@@ -149,36 +214,36 @@ class RunConfig:
 
 
 DEFAULT_CASES = [
-    RouteRequest(
-        case_id="1",
-        slug="cheongdam_to_samseong",
-        name="Case 1: Cheongdam -> Samseong",
-        start_label="Cheongdam Community Service Center",
-        end_label="Samseong 1-dong Community Service Center",
-        start_lon_lat=(127.04931, 37.52503),
-        end_lon_lat=(127.06278, 37.51444),
-        hour="18h",
-    ),
-    RouteRequest(
-        case_id="2",
-        slug="sinsa_to_cheongdam",
-        name="Case 2: Sinsa -> Cheongdam",
-        start_label="Sinsa Community Service Center",
-        end_label="Cheongdam Community Service Center",
-        start_lon_lat=(127.02283, 37.52401),
-        end_lon_lat=(127.04931, 37.52503),
-        hour="22h",
-    ),
-    RouteRequest(
-        case_id="3",
-        slug="gaepo_to_gangnam_office",
-        name="Case 3: Gaepo -> Gangnam Office",
-        start_label="Gaepo 1-dong Community Service Center",
-        end_label="Gangnam-gu Office",
-        start_lon_lat=(127.0543931, 37.48328034),
-        end_lon_lat=(127.04752, 37.51767),
-        hour="18h",
-    ),
+    # RouteRequest(
+    #     case_id="1",
+    #     slug="cheongdam_to_samseong",
+    #     name="Case 1: Cheongdam -> Samseong",
+    #     start_label="Cheongdam Community Service Center",
+    #     end_label="Samseong 1-dong Community Service Center",
+    #     start_lon_lat=(127.04931, 37.52503),
+    #     end_lon_lat=(127.06278, 37.51444),
+    #     hour="18h",
+    # ),
+    # RouteRequest(
+    #     case_id="2",
+    #     slug="sinsa_to_cheongdam",
+    #     name="Case 2: Sinsa -> Cheongdam",
+    #     start_label="Sinsa Community Service Center",
+    #     end_label="Cheongdam Community Service Center",
+    #     start_lon_lat=(127.02283, 37.52401),
+    #     end_lon_lat=(127.04931, 37.52503),
+    #     hour="22h",
+    # ),
+    # RouteRequest(
+    #     case_id="3",
+    #     slug="gaepo_to_gangnam_office",
+    #     name="Case 3: Gaepo -> Gangnam Office",
+    #     start_label="Gaepo 1-dong Community Service Center",
+    #     end_label="Gangnam-gu Office",
+    #     start_lon_lat=(127.0543931, 37.48328034),
+    #     end_lon_lat=(127.04752, 37.51767),
+    #     hour="18h",
+    # ),
 ]
 
 
@@ -201,6 +266,75 @@ def normalize_risk_level(value: object) -> str:
         return "normal"
     text = str(value).strip()
     return RISK_LEVEL_ALIASES.get(text, "normal")
+
+
+def normalize_highway_class(value: object) -> str:
+    if value is None or pd.isna(value):
+        return "other"
+    if isinstance(value, (list, tuple, set)):
+        highway_values = [str(item).strip().lower() for item in value if str(item).strip()]
+    else:
+        text = str(value).strip()
+        highway_values: list[str]
+        if text.startswith("[") and text.endswith("]"):
+            try:
+                parsed = ast.literal_eval(text)
+            except (SyntaxError, ValueError):
+                parsed = [text]
+            if isinstance(parsed, (list, tuple, set)):
+                highway_values = [str(item).strip().lower() for item in parsed if str(item).strip()]
+            else:
+                highway_values = [str(parsed).strip().lower()]
+        else:
+            highway_values = [text.lower()]
+
+    for road_type in highway_values:
+        normalized = ROAD_CLASS_LOOKUP.get(road_type)
+        if normalized:
+            return normalized
+    return "other"
+
+
+def robust_normalize(series: pd.Series, quantile: float = ROBUST_NORM_QUANTILE) -> pd.Series:
+    numeric = pd.to_numeric(series, errors="coerce").fillna(0.0).clip(lower=0.0)
+    scale = float(numeric.quantile(quantile))
+    if not math.isfinite(scale) or scale <= 0:
+        max_value = float(numeric.max()) if len(numeric) else 0.0
+        scale = max_value if max_value > 0 else 1.0
+    return (numeric / scale).clip(lower=0.0, upper=1.0)
+
+
+def parse_numeric_width(value: object) -> float:
+    if value is None or pd.isna(value):
+        return float("nan")
+    if isinstance(value, (int, float, np.integer, np.floating)):
+        return float(value)
+    text = str(value).strip()
+    if not text:
+        return float("nan")
+    match = re.search(r"(\d+(?:\.\d+)?)", text)
+    if not match:
+        return float("nan")
+    return float(match.group(1))
+
+
+def geometry_straightness_penalty(geometry: object, length_m: float) -> float:
+    if geometry is None or getattr(geometry, "is_empty", True) or length_m <= 0:
+        return 0.0
+    coords = list(getattr(geometry, "coords", []))
+    if len(coords) < 2:
+        return 0.0
+    start_x, start_y = coords[0]
+    end_x, end_y = coords[-1]
+    straight_distance = math.hypot(end_x - start_x, end_y - start_y)
+    if straight_distance <= 0:
+        return 0.0
+    sinuosity = max(1.0, length_m / straight_distance)
+    return max(0.0, (sinuosity - 1.0) * 8.0)
+
+
+def effective_lambda(lambda_value: float) -> float:
+    return lambda_value ** 0.72
 
 
 def parse_lambdas(value: str) -> list[float]:
@@ -282,11 +416,15 @@ def geocode_address_nominatim(address: str) -> tuple[float, float]:
     )
     with urlopen(request, timeout=20) as response:
         payload = response.read().decode("utf-8")
-    rows = pd.read_json(payload)
-    if rows.empty:
+    try:
+        rows = json.loads(payload)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"invalid geocoding response for address '{address}'") from exc
+    if not rows:
         raise ValueError(f"address not found: {address}")
-    lat = float(rows.loc[0, "lat"])
-    lon = float(rows.loc[0, "lon"])
+    first_row = rows[0]
+    lat = float(first_row["lat"])
+    lon = float(first_row["lon"])
     return lon, lat
 
 
@@ -337,7 +475,7 @@ def build_custom_request(args: argparse.Namespace, cache: dict[str, tuple[float,
 def parse_args() -> RunConfig:
     parser = argparse.ArgumentParser(description="OR-Tools route optimization with risk-aware costs")
     parser.add_argument("--scenario", default=DEFAULT_SCENARIO)
-    parser.add_argument("--lambdas", default="0.0,0.5,1.0")
+    parser.add_argument("--lambdas", default=",".join(f"{value:.1f}" for value in DEFAULT_LAMBDAS))
     parser.add_argument("--case-id", default="all")
     parser.add_argument("--subgraph-mode", choices=[DEFAULT_SUBGRAPH_MODE], default=DEFAULT_SUBGRAPH_MODE)
     parser.add_argument("--full-graph-fallback", action=argparse.BooleanOptionalAction, default=True)
@@ -394,7 +532,7 @@ def load_inputs() -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
     return edges, nodes
 
 
-def nearest_node(nodes: gpd.GeoDataFrame, lon_lat: tuple[float, float]) -> tuple[object, float]:
+def nearest_node(nodes: gpd.GeoDataFrame, lon_lat: tuple[float, float]) -> tuple[object, float, Point]:
     transformer = Transformer.from_crs("EPSG:4326", TARGET_CRS, always_xy=True)
     x, y = transformer.transform(*lon_lat)
     point = Point(x, y)
@@ -407,11 +545,11 @@ def nearest_node(nodes: gpd.GeoDataFrame, lon_lat: tuple[float, float]) -> tuple
         else:
             nearest_pos = int(np.ravel(nearest_array)[0])
         nearest_row = nodes.iloc[nearest_pos]
-        return nearest_row["osmid"], float(nearest_row.geometry.distance(point))
+        return nearest_row["osmid"], float(nearest_row.geometry.distance(point)), nearest_row.geometry
     except Exception:
         distances = nodes.geometry.distance(point)
         nearest_idx = distances.idxmin()
-        return nodes.loc[nearest_idx, "osmid"], float(distances.loc[nearest_idx])
+        return nodes.loc[nearest_idx, "osmid"], float(distances.loc[nearest_idx]), nodes.loc[nearest_idx, "geometry"]
 
 
 def normalize_oneway(value: object) -> bool:
@@ -422,11 +560,31 @@ def normalize_oneway(value: object) -> bool:
     return str(value).strip().lower() in {"true", "1", "yes", "y", "t"}
 
 
+def scenario_speed_kmh(cost_df: pd.DataFrame, scenario: str, hour: str) -> pd.Series:
+    level_col = f"risk_level_{hour}"
+    if level_col not in cost_df.columns:
+        raise ValueError(f"missing required edge column: {level_col}")
+
+    normalized_levels = cost_df[level_col].apply(normalize_risk_level)
+    scenario_name = scenario.upper()
+    if scenario_name == "S1":
+        speed_col = f"speed_S1_{hour}"
+        if speed_col in cost_df.columns:
+            return pd.to_numeric(cost_df[speed_col], errors="coerce").fillna(25.0).clip(lower=1.0)
+
+    if scenario_name not in SCENARIO_SPEED_LIMITS:
+        raise ValueError(f"unsupported scenario: {scenario}")
+
+    return pd.to_numeric(
+        normalized_levels.map(SCENARIO_SPEED_LIMITS[scenario_name]),
+        errors="coerce",
+    ).fillna(25.0).clip(lower=1.0)
+
+
 def prepare_edge_costs(edges: gpd.GeoDataFrame, request: RouteRequest, scenario: str) -> gpd.GeoDataFrame:
-    speed_col = f"speed_{scenario}_{request.hour}"
     rs_col = f"RS_{request.hour}"
     level_col = f"risk_level_{request.hour}"
-    required_cols = {"edge_id", "u", "v", "oneway", "geometry", "length", speed_col, rs_col, level_col}
+    required_cols = {"edge_id", "u", "v", "oneway", "geometry", "length", rs_col, level_col}
     missing_cols = required_cols - set(edges.columns)
     if missing_cols:
         raise ValueError(f"missing required edge columns: {sorted(missing_cols)}")
@@ -437,25 +595,93 @@ def prepare_edge_costs(edges: gpd.GeoDataFrame, request: RouteRequest, scenario:
     invalid_length = cost_df["edge_length_m"].isna() | cost_df["edge_length_m"].le(0)
     cost_df.loc[invalid_length, "edge_length_m"] = cost_df.loc[invalid_length].geometry.length
 
-    speed_kmh = pd.to_numeric(cost_df[speed_col], errors="coerce").fillna(25).clip(lower=1)
+    speed_kmh = scenario_speed_kmh(cost_df, scenario, request.hour)
     speed_mps = speed_kmh * 1000.0 / 3600.0
     rs = pd.to_numeric(cost_df[rs_col], errors="coerce").fillna(0.0).clip(lower=0.0)
+    cost_df["road_class"] = cost_df["highway"].apply(normalize_highway_class)
+    degree_series = pd.concat([cost_df["u"], cost_df["v"]], ignore_index=True).value_counts()
+    cost_df["node_degree_u"] = cost_df["u"].map(degree_series).fillna(1).astype(float)
+    cost_df["node_degree_v"] = cost_df["v"].map(degree_series).fillna(1).astype(float)
+    cost_df["width_m"] = cost_df["width"].apply(parse_numeric_width)
 
     cost_df["time_sec"] = cost_df["edge_length_m"] / speed_mps
-    cost_df["risk_cost"] = (rs / 100.0) * cost_df["edge_length_m"]
-
-    max_time = float(cost_df["time_sec"].max())
-    max_risk = float(cost_df["risk_cost"].max())
-    cost_df["time_norm"] = cost_df["time_sec"] / max_time if max_time > 0 else 0.0
-    cost_df["risk_norm"] = cost_df["risk_cost"] / max_risk if max_risk > 0 else 0.0
+    cost_df["rs_value"] = rs
     cost_df["risk_level"] = cost_df[level_col].apply(normalize_risk_level)
+    cost_df["risk_level_penalty"] = pd.to_numeric(
+        cost_df["risk_level"].map(RISK_LEVEL_PENALTIES),
+        errors="coerce",
+    ).fillna(0.0)
+    cost_df["risk_cost"] = ((rs / 100.0) * cost_df["time_sec"]).astype(float) + cost_df["risk_level_penalty"].astype(float)
+    road_discomfort = cost_df["road_class"].map(
+        {
+            "trunk": 11.0,
+            "primary": 8.0,
+            "secondary": 4.5,
+            "tertiary": 1.2,
+            "local": 0.0,
+            "service": 1.0,
+            "path": 0.6,
+            "other": 1.4,
+        }
+    ).fillna(1.4)
+    short_edge_penalty = ((SHORT_EDGE_THRESHOLD_M - cost_df["edge_length_m"]).clip(lower=0.0) / SHORT_EDGE_THRESHOLD_M) * 5.0
+    intersection_penalty = (
+        (cost_df["node_degree_u"] - 2.0).clip(lower=0.0)
+        + (cost_df["node_degree_v"] - 2.0).clip(lower=0.0)
+    ) * TURN_COMPLEXITY_FACTOR
+    width_penalty = (cost_df["width_m"].fillna(0.0) / 8.0).clip(lower=0.0, upper=2.5)
+    bridge_tunnel_penalty = (
+        cost_df["bridge"].fillna("").astype(str).ne("").astype(float) * 1.8
+        + cost_df["tunnel"].fillna("").astype(str).ne("").astype(float) * 1.2
+    )
+    curvature_penalty = pd.Series(
+        [geometry_straightness_penalty(geom, length_m) for geom, length_m in zip(cost_df.geometry, cost_df["edge_length_m"])],
+        index=cost_df.index,
+        dtype="float64",
+    )
+    cost_df["comfort_cost"] = (
+        road_discomfort
+        + short_edge_penalty
+        + intersection_penalty
+        + width_penalty
+        + bridge_tunnel_penalty
+        + curvature_penalty
+    )
+    cost_df["time_norm"] = robust_normalize(cost_df["time_sec"])
+    cost_df["risk_norm"] = robust_normalize(cost_df["risk_cost"])
+    cost_df["comfort_norm"] = robust_normalize(cost_df["comfort_cost"])
     cost_df["oneway_bool"] = cost_df["oneway"].apply(normalize_oneway)
     return cost_df
+
+
+def edge_heading_degrees(geometry, reverse: bool = False) -> tuple[float, float]:
+    if geometry is None or geometry.is_empty:
+        return 0.0, 0.0
+    coords = list(geometry.coords)
+    if len(coords) < 2:
+        return 0.0, 0.0
+    if reverse:
+        coords = list(reversed(coords))
+
+    start_x0, start_y0 = coords[0]
+    start_x1, start_y1 = coords[1]
+    end_x0, end_y0 = coords[-2]
+    end_x1, end_y1 = coords[-1]
+
+    start_heading = math.degrees(math.atan2(start_y1 - start_y0, start_x1 - start_x0)) % 360.0
+    end_heading = math.degrees(math.atan2(end_y1 - end_y0, end_x1 - end_x0)) % 360.0
+    return start_heading, end_heading
+
+
+def angle_difference_degrees(angle_a: float, angle_b: float) -> float:
+    diff = abs(angle_a - angle_b) % 360.0
+    return min(diff, 360.0 - diff)
 
 
 def build_arcs(cost_df: pd.DataFrame) -> list[Arc]:
     arcs: list[Arc] = []
     for row in cost_df.itertuples(index=False):
+        start_heading_deg, end_heading_deg = edge_heading_degrees(row.geometry, reverse=False)
         forward = Arc(
             tail=row.u,
             head=row.v,
@@ -463,14 +689,21 @@ def build_arcs(cost_df: pd.DataFrame) -> list[Arc]:
             edge_id=str(row.edge_id),
             length_m=float(row.edge_length_m),
             time_sec=float(row.time_sec),
+            rs_value=float(row.rs_value),
             risk_cost=float(row.risk_cost),
+            comfort_cost=float(row.comfort_cost),
             time_norm=float(row.time_norm),
             risk_norm=float(row.risk_norm),
+            comfort_norm=float(row.comfort_norm),
             risk_level=str(row.risk_level),
+            road_class=str(row.road_class),
+            start_heading_deg=float(start_heading_deg),
+            end_heading_deg=float(end_heading_deg),
             geometry=row.geometry,
         )
         arcs.append(forward)
         if not bool(row.oneway_bool):
+            rev_start_heading_deg, rev_end_heading_deg = edge_heading_degrees(row.geometry, reverse=True)
             arcs.append(
                 Arc(
                     tail=row.v,
@@ -479,10 +712,16 @@ def build_arcs(cost_df: pd.DataFrame) -> list[Arc]:
                     edge_id=str(row.edge_id),
                     length_m=float(row.edge_length_m),
                     time_sec=float(row.time_sec),
+                    rs_value=float(row.rs_value),
                     risk_cost=float(row.risk_cost),
+                    comfort_cost=float(row.comfort_cost),
                     time_norm=float(row.time_norm),
                     risk_norm=float(row.risk_norm),
+                    comfort_norm=float(row.comfort_norm),
                     risk_level=str(row.risk_level),
+                    road_class=str(row.road_class),
+                    start_heading_deg=float(rev_start_heading_deg),
+                    end_heading_deg=float(rev_end_heading_deg),
                     geometry=row.geometry,
                 )
             )
@@ -539,8 +778,18 @@ def dijkstra_distances(
     return distances
 
 
-def shortest_path(arcs: list[Arc], start_node: object, end_node: object, weight_name: str) -> tuple[list[Arc], float]:
-    adjacency = build_weighted_adjacency(arcs, lambda arc: getattr(arc, weight_name))
+def shortest_path(
+    arcs: list[Arc],
+    start_node: object,
+    end_node: object,
+    weight_name: str | None = None,
+    weight_getter=None,
+) -> tuple[list[Arc], float]:
+    if weight_getter is None:
+        if weight_name is None:
+            raise ValueError("weight_name or weight_getter is required")
+        weight_getter = lambda arc: getattr(arc, weight_name)
+    adjacency = build_weighted_adjacency(arcs, weight_getter)
     queue: list[tuple[float, object]] = [(0.0, start_node)]
     distances = {start_node: 0.0}
     previous: dict[object, tuple[object, Arc]] = {}
@@ -572,17 +821,32 @@ def shortest_path(arcs: list[Arc], start_node: object, end_node: object, weight_
 
 
 def build_subgraph_arcs(arcs: list[Arc], start_node: object, end_node: object) -> tuple[list[Arc], dict[str, float | int | bool]]:
-    time_path_arcs, _ = shortest_path(arcs, start_node, end_node, "time_norm")
-    risk_path_arcs, _ = shortest_path(arcs, start_node, end_node, "risk_norm")
+    corridor_paths: list[list[Arc]] = []
+    for lambda_value in SUBGRAPH_CORRIDOR_LAMBDAS:
+        path_arcs, _ = shortest_path(
+            arcs,
+            start_node,
+            end_node,
+            weight_getter=lambda arc, value=lambda_value: (
+                (1.0 - effective_lambda(value)) * arc.time_norm
+                + effective_lambda(value) * arc.risk_norm
+                + ADVANCED_PENALTY_WEIGHT * arc.comfort_norm * (0.3 + 0.9 * effective_lambda(value))
+            ),
+        )
+        corridor_paths.append(path_arcs)
 
+    time_path_arcs = corridor_paths[0]
+    risk_path_arcs = corridor_paths[-1]
     baseline_time_distance_m = sum(arc.length_m for arc in time_path_arcs)
     baseline_risk_distance_m = sum(arc.length_m for arc in risk_path_arcs)
-    cutoff = max(baseline_time_distance_m, baseline_risk_distance_m) * SUBGRAPH_RADIUS_RATIO
+    max_corridor_distance_m = max(sum(arc.length_m for arc in path) for path in corridor_paths)
+    cutoff = max_corridor_distance_m * SUBGRAPH_RADIUS_RATIO + SUBGRAPH_BUFFER_M
 
     extreme_nodes = {start_node, end_node}
-    for arc in time_path_arcs + risk_path_arcs:
-        extreme_nodes.add(arc.tail)
-        extreme_nodes.add(arc.head)
+    for path_arcs in corridor_paths:
+        for arc in path_arcs:
+            extreme_nodes.add(arc.tail)
+            extreme_nodes.add(arc.head)
 
     forward_length = build_weighted_adjacency(arcs, lambda arc: arc.length_m)
     reverse_length = reverse_weighted_adjacency(arcs, lambda arc: arc.length_m)
@@ -595,6 +859,8 @@ def build_subgraph_arcs(arcs: list[Arc], start_node: object, end_node: object) -
         "baseline_time_distance_m": round(baseline_time_distance_m, 3),
         "baseline_risk_distance_m": round(baseline_risk_distance_m, 3),
         "subgraph_cutoff_m": round(cutoff, 3),
+        "corridor_path_count": len(corridor_paths),
+        "corridor_seed_node_count": len(extreme_nodes),
         "subgraph_node_count": len(eligible_nodes),
         "subgraph_edge_count": len(subgraph_arcs),
         "full_graph_node_count": len({arc.tail for arc in arcs} | {arc.head for arc in arcs}),
@@ -605,8 +871,26 @@ def build_subgraph_arcs(arcs: list[Arc], start_node: object, end_node: object) -
 
 
 def arc_cost(arc: Arc, lambda_value: float) -> int:
-    raw_cost = (1.0 - lambda_value) * arc.time_norm + lambda_value * arc.risk_norm
+    adjusted_lambda = effective_lambda(lambda_value)
+    comfort_weight = ADVANCED_PENALTY_WEIGHT * (0.3 + 0.9 * adjusted_lambda)
+    raw_cost = (1.0 - adjusted_lambda) * arc.time_norm + adjusted_lambda * arc.risk_norm + comfort_weight * arc.comfort_norm
     return max(0, int(round(raw_cost * COST_SCALE)))
+
+
+def turn_transition_cost(prev_arc: Arc | None, next_arc: Arc, lambda_value: float) -> int:
+    if prev_arc is None:
+        return 0
+    turn_angle = angle_difference_degrees(prev_arc.end_heading_deg, next_arc.start_heading_deg)
+    if turn_angle <= TURN_FREE_ANGLE_DEG:
+        return 0
+
+    adjusted_lambda = effective_lambda(lambda_value)
+    normalized_turn = ((turn_angle - TURN_FREE_ANGLE_DEG) / (180.0 - TURN_FREE_ANGLE_DEG)) ** 1.35
+    turn_weight = TURN_PENALTY_SCALE * (0.85 + 0.35 * adjusted_lambda)
+    penalty = normalized_turn * turn_weight
+    if turn_angle >= UTURN_ANGLE_DEG:
+        penalty *= UTURN_PENALTY_MULTIPLIER
+    return max(0, int(round(penalty * COST_SCALE)))
 
 
 def validate_solution_path(
@@ -676,34 +960,40 @@ def status_to_name(solver: min_cost_flow.SimpleMinCostFlow, status: int) -> str:
 
 def optimize_route(subgraph_arcs: list[Arc], start_node: object, end_node: object, lambda_value: float) -> OptimizationResult:
     node_ids = sorted({start_node, end_node} | {arc.tail for arc in subgraph_arcs} | {arc.head for arc in subgraph_arcs})
-    node_to_idx = {node_id: idx for idx, node_id in enumerate(node_ids)}
+    adjacency: dict[object, list[tuple[int, Arc]]] = defaultdict(list)
+    for arc_idx, arc in enumerate(subgraph_arcs):
+        adjacency[arc.tail].append((arc_idx, arc))
 
-    solver = min_cost_flow.SimpleMinCostFlow()
-    arc_lookup: list[Arc] = []
-    for arc in subgraph_arcs:
-        solver.add_arc_with_capacity_and_unit_cost(
-            node_to_idx[arc.tail],
-            node_to_idx[arc.head],
-            1,
-            arc_cost(arc, lambda_value),
-        )
-        arc_lookup.append(arc)
+    start_state = (start_node, -1)
+    queue: list[tuple[int, object, int]] = [(0, start_node, -1)]
+    distances: dict[tuple[object, int], int] = {start_state: 0}
+    previous: dict[tuple[object, int], tuple[tuple[object, int], Arc]] = {}
+    final_state: tuple[object, int] | None = None
 
-    for node_id, node_idx in node_to_idx.items():
-        if node_id == start_node:
-            solver.set_node_supply(node_idx, 1)
-        elif node_id == end_node:
-            solver.set_node_supply(node_idx, -1)
-        else:
-            solver.set_node_supply(node_idx, 0)
+    while queue:
+        current_cost, node, prev_arc_idx = heapq.heappop(queue)
+        state = (node, prev_arc_idx)
+        if current_cost > distances.get(state, math.inf):
+            continue
+        if node == end_node:
+            final_state = state
+            break
 
-    status = solver.solve()
-    status_name = status_to_name(solver, status)
-    if status != solver.OPTIMAL:
+        prev_arc = subgraph_arcs[prev_arc_idx] if prev_arc_idx >= 0 else None
+        for next_arc_idx, next_arc in adjacency.get(node, []):
+            transition_cost = arc_cost(next_arc, lambda_value) + turn_transition_cost(prev_arc, next_arc, lambda_value)
+            next_state = (next_arc.head, next_arc_idx)
+            new_cost = current_cost + transition_cost
+            if new_cost < distances.get(next_state, math.inf):
+                distances[next_state] = new_cost
+                previous[next_state] = (state, next_arc)
+                heapq.heappush(queue, (new_cost, next_arc.head, next_arc_idx))
+
+    if final_state is None:
         return OptimizationResult(
             lambda_value=lambda_value,
-            solver="ortools_min_cost_flow",
-            optimization_status=status_name,
+            solver="dijkstra_turn_penalty",
+            optimization_status="Infeasible",
             objective_value=float("nan"),
             normalized_objective=float("nan"),
             subgraph_node_count=len(node_ids),
@@ -713,24 +1003,25 @@ def optimize_route(subgraph_arcs: list[Arc], start_node: object, end_node: objec
             solver_selected_arc_count=0,
         )
 
-    selected_arcs: list[Arc] = []
-    for arc_idx in range(solver.num_arcs()):
-        if solver.flow(arc_idx) == 1:
-            selected_arcs.append(arc_lookup[arc_idx])
-
-    path_valid, path_arcs = validate_solution_path(selected_arcs, start_node, end_node)
-    objective_value = solver.optimal_cost() / COST_SCALE
+    path_arcs: list[Arc] = []
+    trace_state = final_state
+    while trace_state != start_state:
+        prev_state, arc = previous[trace_state]
+        path_arcs.append(arc)
+        trace_state = prev_state
+    path_arcs.reverse()
+    objective_value = distances[final_state] / COST_SCALE
     return OptimizationResult(
         lambda_value=lambda_value,
-        solver="ortools_min_cost_flow",
-        optimization_status=status_name if path_valid else "InvalidPath",
+        solver="dijkstra_turn_penalty",
+        optimization_status="Optimal",
         objective_value=objective_value,
-        normalized_objective=objective_value if path_valid else float("nan"),
+        normalized_objective=objective_value,
         subgraph_node_count=len(node_ids),
         subgraph_edge_count=len(subgraph_arcs),
-        path_arcs=path_arcs if path_valid else [],
-        path_valid=path_valid,
-        solver_selected_arc_count=len(selected_arcs),
+        path_arcs=path_arcs,
+        path_valid=True,
+        solver_selected_arc_count=len(path_arcs),
     )
 
 
@@ -743,6 +1034,13 @@ def route_difference(base_arcs: list[Arc], other_arcs: list[Arc]) -> float:
     return 1.0 - len(base_set & other_set) / union_count
 
 
+def path_signature(arcs: list[Arc]) -> str:
+    if not arcs:
+        return "empty"
+    joined = "|".join(f"{arc.tail}>{arc.head}:{arc.edge_id}" for arc in arcs)
+    return hashlib.sha1(joined.encode("utf-8")).hexdigest()[:10]
+
+
 def summarize_route(
     request: RouteRequest,
     result: OptimizationResult,
@@ -751,11 +1049,22 @@ def summarize_route(
     end_snap_m: float,
     diagnostics: dict[str, float | int | bool],
     subgraph_mode: str,
+    route_label: str,
+    route_signature_value: str,
 ) -> dict[str, object]:
     counts = pd.Series([arc.risk_level for arc in result.path_arcs], dtype="object").value_counts()
     distance_m = sum(arc.length_m for arc in result.path_arcs)
     raw_time_min = sum(arc.time_sec for arc in result.path_arcs) / 60.0
+    raw_exposure_sum = sum(arc.rs_value for arc in result.path_arcs)
     raw_risk_sum = sum(arc.risk_cost for arc in result.path_arcs)
+    raw_comfort_sum = sum(arc.comfort_cost for arc in result.path_arcs)
+    base_distance_m = sum(arc.length_m for arc in base_arcs)
+    base_time_min = sum(arc.time_sec for arc in base_arcs) / 60.0
+    base_exposure_sum = sum(arc.rs_value for arc in base_arcs)
+    base_risk_sum = sum(arc.risk_cost for arc in base_arcs)
+    base_comfort_sum = sum(arc.comfort_cost for arc in base_arcs)
+    high_risk_edges = int(counts.get("high_risk", 0))
+    path_arc_count = len(result.path_arcs)
     return {
         "case_id": request.case_id,
         "case_name": request.name,
@@ -764,6 +1073,8 @@ def summarize_route(
         "hour": HOUR_LABELS[request.hour],
         "scenario": diagnostics["scenario"],
         "lambda": result.lambda_value,
+        "route_label": route_label,
+        "route_signature": route_signature_value,
         "solver": result.solver,
         "optimization_status": result.optimization_status,
         "objective_value": round(result.objective_value, 6) if math.isfinite(result.objective_value) else result.objective_value,
@@ -778,15 +1089,23 @@ def summarize_route(
         "raw_time_min": round(raw_time_min, 2),
         "risk_sum": round(raw_risk_sum, 2),
         "raw_risk_sum": round(raw_risk_sum, 2),
+        "exposure_sum": round(raw_exposure_sum, 2),
+        "comfort_sum": round(raw_comfort_sum, 2),
         "normal_edges": int(counts.get("normal", 0)),
         "caution_edges": int(counts.get("caution", 0)),
         "risk_edges": int(counts.get("risk", 0)),
-        "high_risk_edges": int(counts.get("high_risk", 0)),
+        "high_risk_edges": high_risk_edges,
+        "high_risk_edge_ratio": round(high_risk_edges / path_arc_count, 3) if path_arc_count else 0.0,
         "route_diff_vs_lambda0": round(route_difference(base_arcs, result.path_arcs), 3),
+        "distance_detour_ratio_vs_lambda0": round(distance_m / base_distance_m, 3) if base_distance_m > 0 else float("nan"),
+        "time_increase_ratio_vs_lambda0": round(raw_time_min / base_time_min, 3) if base_time_min > 0 else float("nan"),
+        "exposure_reduction_ratio_vs_lambda0": round(1.0 - (raw_exposure_sum / base_exposure_sum), 3) if base_exposure_sum > 0 else float("nan"),
+        "risk_reduction_ratio_vs_lambda0": round(1.0 - (raw_risk_sum / base_risk_sum), 3) if base_risk_sum > 0 else float("nan"),
+        "comfort_reduction_ratio_vs_lambda0": round(1.0 - (raw_comfort_sum / base_comfort_sum), 3) if base_comfort_sum > 0 else float("nan"),
         "start_snap_m": round(start_snap_m, 1),
         "end_snap_m": round(end_snap_m, 1),
         "path_valid": result.path_valid,
-        "path_arc_count": len(result.path_arcs),
+        "path_arc_count": path_arc_count,
         "solver_selected_arc_count": result.solver_selected_arc_count,
         "used_full_graph_fallback": bool(diagnostics["used_full_graph_fallback"]),
         "baseline_time_distance_m": diagnostics["baseline_time_distance_m"],
@@ -832,6 +1151,124 @@ def plot_order(lambda_values: list[float]) -> list[float]:
     return ordered
 
 
+def add_road_style_columns(edges: gpd.GeoDataFrame, hour: str) -> gpd.GeoDataFrame:
+    styled = edges.copy()
+    styled["road_class"] = styled["highway"].apply(normalize_highway_class)
+    styled["risk_level_plot"] = styled[f"risk_level_{hour}"].apply(normalize_risk_level)
+    styled["risk_overlay_color"] = styled["risk_level_plot"].map(RISK_COLORS).fillna(RISK_COLORS["normal"])
+    return styled
+
+
+def select_plot_lambdas(results_by_lambda: dict[float, OptimizationResult], requested_lambdas: list[float]) -> list[float]:
+    preferred = [0.0, 0.5, 1.0]
+    selected = [
+        lambda_value
+        for lambda_value in preferred
+        if lambda_value in requested_lambdas
+        and lambda_value in results_by_lambda
+        and results_by_lambda[lambda_value].path_valid
+    ]
+    if selected:
+        return selected
+    priority = plot_order(requested_lambdas)
+    return [
+        lambda_value
+        for lambda_value in priority[: min(3, len(priority))]
+        if lambda_value in results_by_lambda and results_by_lambda[lambda_value].path_valid
+    ]
+
+
+def render_plot_lambdas(plot_lambdas: list[float]) -> list[float]:
+    render_priority = [0.5, 1.0, 0.0]
+    ordered = [value for value in render_priority if value in plot_lambdas]
+    ordered.extend(value for value in plot_lambdas if value not in ordered)
+    return ordered
+
+
+def compact_route_title(request: RouteRequest) -> str:
+    title = request.name.strip()
+    if len(title) <= 58:
+        return title
+    if "->" in title:
+        left, right = [part.strip() for part in title.split("->", 1)]
+        return f"{left}\n-> {right}"
+    return title
+
+
+def build_route_summary_lines(plot_lambdas: list[float], results_by_lambda: dict[float, OptimizationResult]) -> list[str]:
+    lines: list[str] = []
+    for lambda_value in plot_lambdas:
+        result = results_by_lambda.get(lambda_value)
+        if result is None or not result.path_valid:
+            continue
+        distance_km = sum(arc.length_m for arc in result.path_arcs) / 1000.0
+        time_min = sum(arc.time_sec for arc in result.path_arcs) / 60.0
+        high_risk_count = sum(1 for arc in result.path_arcs if arc.risk_level == "high_risk")
+        lines.append(f"l={lambda_value:g}  {distance_km:.2f}km | {time_min:.1f}m | HR {high_risk_count}")
+    return lines
+
+
+def compute_viewport_bounds(
+    route_bounds: tuple[float, float, float, float],
+    network_bounds: tuple[float, float, float, float],
+    start_point: Point,
+    end_point: Point,
+) -> tuple[float, float, float, float]:
+    minx, miny, maxx, maxy = route_bounds
+    net_minx, net_miny, net_maxx, net_maxy = network_bounds
+
+    minx = min(minx, start_point.x, end_point.x)
+    miny = min(miny, start_point.y, end_point.y)
+    maxx = max(maxx, start_point.x, end_point.x)
+    maxy = max(maxy, start_point.y, end_point.y)
+
+    width = max(maxx - minx, 1.0)
+    height = max(maxy - miny, 1.0)
+    pad_x = max(width * 0.12, 220.0)
+    pad_y = max(height * 0.12, 220.0)
+
+    minx -= pad_x
+    maxx += pad_x
+    miny -= pad_y
+    maxy += pad_y
+
+    # Keep the viewport balanced so empty outer margins do not dominate one side.
+    width = maxx - minx
+    height = maxy - miny
+    target_span = max(width, height)
+    cx = (minx + maxx) / 2.0
+    cy = (miny + maxy) / 2.0
+
+    minx = cx - target_span / 2.0
+    maxx = cx + target_span / 2.0
+    miny = cy - target_span / 2.0
+    maxy = cy + target_span / 2.0
+
+    # Clamp to the available road network extent so the outer frame still shows roads.
+    if minx < net_minx:
+        shift = net_minx - minx
+        minx += shift
+        maxx += shift
+    if maxx > net_maxx:
+        shift = maxx - net_maxx
+        minx -= shift
+        maxx -= shift
+    if miny < net_miny:
+        shift = net_miny - miny
+        miny += shift
+        maxy += shift
+    if maxy > net_maxy:
+        shift = maxy - net_maxy
+        miny -= shift
+        maxy -= shift
+
+    minx = max(minx, net_minx)
+    miny = max(miny, net_miny)
+    maxx = min(maxx, net_maxx)
+    maxy = min(maxy, net_maxy)
+    return minx, miny, maxx, maxy
+
+
 def save_route_map(
     edges: gpd.GeoDataFrame,
     request: RouteRequest,
@@ -841,26 +1278,75 @@ def save_route_map(
 ) -> Path:
     output_path = request_output_path(request, config)
     fig, ax = plt.subplots(figsize=(14, 14), dpi=500)
+    fig.patch.set_facecolor(MAP_BACKGROUND)
+    ax.set_facecolor(MAP_BACKGROUND)
 
-    color_series = edges[f"risk_level_{request.hour}"].apply(normalize_risk_level).map(RISK_COLORS).fillna("#eeeeee")
-    edges.plot(ax=ax, color="#e6e6e6", linewidth=0.65, alpha=0.8, zorder=1)
-    edges.plot(ax=ax, color=color_series, linewidth=0.45, alpha=0.72, zorder=2)
+    styled_edges = add_road_style_columns(edges, request.hour)
+    for road_class in ROAD_STYLE_ORDER:
+        class_edges = styled_edges[styled_edges["road_class"] == road_class]
+        if class_edges.empty:
+            continue
+        road_style = ROAD_STYLE_CONFIG[road_class]
+        class_edges.plot(
+            ax=ax,
+            color=road_style["casing"],
+            linewidth=road_style["casing_width"],
+            alpha=road_style["alpha"],
+            zorder=1,
+        )
+        class_edges.plot(
+            ax=ax,
+            color=road_style["fill"],
+            linewidth=road_style["fill_width"],
+            alpha=min(1.0, road_style["alpha"] + 0.03),
+            zorder=2,
+        )
 
-    for lambda_value in plot_order(config.lambdas):
+    risk_edges = styled_edges[styled_edges["risk_level_plot"] != "normal"]
+    if not risk_edges.empty:
+        risk_linewidth = risk_edges["road_class"].map(
+            lambda road_class: max(0.45, ROAD_STYLE_CONFIG.get(road_class, ROAD_STYLE_CONFIG["other"])["fill_width"] * 0.34)
+        )
+        risk_edges.plot(
+            ax=ax,
+            color=risk_edges["risk_overlay_color"],
+            linewidth=risk_linewidth,
+            alpha=0.75,
+            zorder=3,
+        )
+
+    plot_lambdas = select_plot_lambdas(results_by_lambda, config.lambdas)
+    for lambda_value in render_plot_lambdas(plot_lambdas):
         route_gdf = arcs_to_gdf(results_by_lambda[lambda_value].path_arcs, edges.crs)
         if route_gdf.empty:
             continue
+        route_color = ROUTE_COLORS.get(lambda_value, "#333333")
+        route_width = ROUTE_LINEWIDTHS.get(lambda_value, 3.4)
         route_gdf.plot(
             ax=ax,
-            color=ROUTE_COLORS.get(lambda_value, "#333333"),
-            linewidth=ROUTE_LINEWIDTHS.get(lambda_value, 3.4),
+            color="white",
+            linewidth=route_width + 1.6,
             linestyle=ROUTE_LINESTYLES.get(lambda_value, "solid"),
-            alpha=0.9,
+            alpha=0.62,
+            zorder=max(4, ROUTE_ZORDERS.get(lambda_value, 5) - 1),
+        )
+        route_gdf.plot(
+            ax=ax,
+            color=route_color,
+            linewidth=route_width,
+            linestyle=ROUTE_LINESTYLES.get(lambda_value, "solid"),
+            alpha=0.78,
             zorder=ROUTE_ZORDERS.get(lambda_value, 5),
         )
 
-    start_point = lon_lat_to_projected_point(request.start_lon_lat)
-    end_point = lon_lat_to_projected_point(request.end_lon_lat)
+    start_point = Point(
+        float(diagnostics.get("start_snap_x", lon_lat_to_projected_point(request.start_lon_lat).x)),
+        float(diagnostics.get("start_snap_y", lon_lat_to_projected_point(request.start_lon_lat).y)),
+    )
+    end_point = Point(
+        float(diagnostics.get("end_snap_x", lon_lat_to_projected_point(request.end_lon_lat).x)),
+        float(diagnostics.get("end_snap_y", lon_lat_to_projected_point(request.end_lon_lat).y)),
+    )
     ax.scatter(start_point.x, start_point.y, s=150, marker="o", color="#00a651", edgecolor="black", linewidth=1.0, zorder=10)
     ax.scatter(end_point.x, end_point.y, s=180, marker="*", color="#7b1fa2", edgecolor="black", linewidth=0.9, zorder=10)
     ax.annotate("Start", (start_point.x, start_point.y), xytext=(8, 8), textcoords="offset points", fontsize=11, fontweight="bold", color="#007a3d", zorder=11)
@@ -869,27 +1355,32 @@ def save_route_map(
     route_gdfs = [arcs_to_gdf(result.path_arcs, edges.crs) for result in results_by_lambda.values() if result.path_arcs]
     if route_gdfs:
         route_bounds = pd.concat(route_gdfs, ignore_index=True).total_bounds
-        minx, miny, maxx, maxy = route_bounds
-        minx = min(minx, start_point.x, end_point.x)
-        miny = min(miny, start_point.y, end_point.y)
-        maxx = max(maxx, start_point.x, end_point.x)
-        maxy = max(maxy, start_point.y, end_point.y)
-        width = maxx - minx
-        height = maxy - miny
-        pad_left = max(width * 0.22, 350)
-        pad_right = max(width * 0.06, 120)
-        pad_bottom = max(height * 0.16, 250)
-        pad_top = max(height * 0.10, 180)
-        ax.set_xlim(minx - pad_left, maxx + pad_right)
-        ax.set_ylim(miny - pad_bottom, maxy + pad_top)
+        minx, miny, maxx, maxy = compute_viewport_bounds(
+            tuple(route_bounds),
+            tuple(edges.total_bounds),
+            start_point,
+            end_point,
+        )
+        ax.set_xlim(minx, maxx)
+        ax.set_ylim(miny, maxy)
 
-    fallback_label = "yes" if diagnostics["used_full_graph_fallback"] else "no"
-    ax.set_title(request.name, fontsize=17, pad=18)
-    subtitle = (
-        f"{HOUR_LABELS[request.hour]} / {config.scenario} / fallback={fallback_label} / "
-        f"lambda={','.join(f'{value:g}' for value in config.lambdas)}"
-    )
-    ax.text(0.5, 1.005, subtitle, transform=ax.transAxes, ha="center", va="bottom", fontsize=12)
+    ax.set_title(compact_route_title(request), fontsize=16, pad=30)
+    subtitle = f"{HOUR_LABELS[request.hour]} / {config.scenario}"
+    ax.text(0.5, 1.015, subtitle, transform=ax.transAxes, ha="center", va="bottom", fontsize=11.5, color="#5f5a53")
+    summary_lines = build_route_summary_lines(plot_lambdas, results_by_lambda)
+    if summary_lines:
+        ax.text(
+            0.02,
+            0.98,
+            "Routes\n" + "\n".join(summary_lines) + "\n\nbg risk: yellow caution / orange risk / red high-risk",
+            transform=ax.transAxes,
+            ha="left",
+            va="top",
+            fontsize=9.3,
+            color="#2f2a24",
+            bbox={"boxstyle": "round,pad=0.45", "facecolor": "#fffdf8", "edgecolor": "#d9d1c3", "alpha": 0.96},
+            zorder=20,
+        )
     ax.set_axis_off()
 
     route_handles = [
@@ -901,21 +1392,17 @@ def save_route_map(
             linestyle=ROUTE_LINESTYLES.get(value, "solid"),
             label=f"lambda={value:g}",
         )
-        for value in config.lambdas
-    ]
-    risk_handles = [
-        Line2D([0], [0], color=RISK_COLORS[level], lw=4, label=RISK_LABELS[level])
-        for level in RISK_LEVELS
+        for value in plot_lambdas
     ]
     point_handles = [
         Line2D([0], [0], marker="o", color="none", markerfacecolor="#00a651", markeredgecolor="black", markersize=8, label="Start"),
         Line2D([0], [0], marker="*", color="none", markerfacecolor="#7b1fa2", markeredgecolor="black", markersize=11, label="End"),
     ]
     ax.legend(
-        handles=route_handles + risk_handles + point_handles,
+        handles=route_handles + point_handles,
         loc="lower center",
         bbox_to_anchor=(0.5, -0.04),
-        ncol=min(len(route_handles) + len(risk_handles) + len(point_handles), 8),
+        ncol=min(len(route_handles) + len(point_handles), 5),
         frameon=True,
     )
     fig.tight_layout()
@@ -930,12 +1417,16 @@ def optimize_request(
     request: RouteRequest,
     config: RunConfig,
 ) -> tuple[dict[float, OptimizationResult], list[dict[str, object]], dict[str, float | int | bool]]:
-    start_node, start_snap_m = nearest_node(nodes, request.start_lon_lat)
-    end_node, end_snap_m = nearest_node(nodes, request.end_lon_lat)
+    start_node, start_snap_m, start_snap_point = nearest_node(nodes, request.start_lon_lat)
+    end_node, end_snap_m, end_snap_point = nearest_node(nodes, request.end_lon_lat)
     cost_df = prepare_edge_costs(edges, request, config.scenario)
     arcs = build_arcs(cost_df)
     subgraph_arcs, diagnostics = build_subgraph_arcs(arcs, start_node, end_node)
     diagnostics["scenario"] = config.scenario
+    diagnostics["start_snap_x"] = float(start_snap_point.x)
+    diagnostics["start_snap_y"] = float(start_snap_point.y)
+    diagnostics["end_snap_x"] = float(end_snap_point.x)
+    diagnostics["end_snap_y"] = float(end_snap_point.y)
 
     log(f"  start node: {start_node} / end node: {end_node}")
     log(f"  snap distance: start {start_snap_m:.1f}m, end {end_snap_m:.1f}m")
@@ -972,6 +1463,12 @@ def optimize_request(
         diagnostics["subgraph_edge_count"] = diagnostics["full_graph_edge_count"]
 
     base_arcs = results_by_lambda[0.0].path_arcs
+    route_labels_by_signature: dict[str, str] = {}
+    for lambda_value in config.lambdas:
+        result = results_by_lambda[lambda_value]
+        signature = path_signature(result.path_arcs)
+        route_labels_by_signature.setdefault(signature, f"R{len(route_labels_by_signature) + 1}")
+    diagnostics["unique_route_count"] = len(route_labels_by_signature)
     summary_rows = [
         summarize_route(
             request,
@@ -981,6 +1478,8 @@ def optimize_request(
             end_snap_m,
             diagnostics,
             config.subgraph_mode,
+            route_labels_by_signature[path_signature(results_by_lambda[lambda_value].path_arcs)],
+            path_signature(results_by_lambda[lambda_value].path_arcs),
         )
         for lambda_value in config.lambdas
     ]
@@ -993,6 +1492,7 @@ def optimize_request(
             f"path_valid={result.path_valid}, "
             f"selected_arc={result.solver_selected_arc_count}"
         )
+    log(f"  unique route count: {diagnostics['unique_route_count']}")
 
     return {lambda_value: results_by_lambda[lambda_value] for lambda_value in config.lambdas}, summary_rows, diagnostics
 
