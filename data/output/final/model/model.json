@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "candidate": "unweighted_sigmoid",
+  "source_sha256": "637b8f51fdb5a69821e8e9c85315018626e61d0cc979b992d7df1ff52b69598f",
+  "continuous_columns": [
+    "intersection_count",
+    "road_type_score",
+    "pedestrian_10h",
+    "pedestrian_18h",
+    "pedestrian_22h"
+  ],
+  "binary_columns": [
+    "is_school_zone",
+    "is_hospital_zone",
+    "is_elderly_zone"
+  ],
+  "feature_names": [
+    "intersection_count",
+    "road_type_score",
+    "is_school_zone",
+    "is_hospital_zone",
+    "is_elderly_zone",
+    "pedestrian_avg"
+  ],
+  "minmax_scale": [
+    0.125,
+    0.011111111111111112,
+    0.000587622842125441,
+    0.0005536663314413304,
+    0.0003141220666488676
+  ],
+  "minmax_min": [
+    0.0,
+    -0.22222222222222218,
+    -5.815765840290605e-07,
+    -3.731188763047281e-07,
+    -1.6498815141677265e-07
+  ],
+  "standard_mean": [
+    0.07042480648728346,
+    0.26958536253868615,
+    0.5514190932546996,
+    0.09500552893475857,
+    0.02349797272392186,
+    0.03464895270424033
+  ],
+  "standard_scale": [
+    0.10056069388867449,
+    0.2383818049091446,
+    0.49734904930929996,
+    0.29322257485839204,
+    0.15147877079573785,
+    0.03796741660077281
+  ],
+  "coefficients": [
+    0.3874904865646957,
+    0.6121156922186317,
+    0.17468895179937743,
+    0.006923410325538877,
+    0.1281737592173065,
+    0.32923325796738623
+  ],
+  "intercept": -4.0875822451352,
+  "calibration_slope": 0.9325388138537668,
+  "calibration_intercept": -0.22287948964510795,
+  "target": "Pooled historical grid accident presence, not hourly or per-trip accident probability",
+  "hourly_score": "Scenario index from hour-specific pedestrian substitution; hourly calibration unverified"
+}

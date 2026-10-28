@@ -1,0 +1,24 @@
+{
+  "selected_model": "unweighted_sigmoid",
+  "selection": {
+    "rule": "Within one standard error of best mean AP, then smallest mean Brier",
+    "best_ap_candidate": "balanced_logistic",
+    "ap_threshold": 0.06927614585760784,
+    "shortlisted": [
+      "balanced_logistic",
+      "balanced_sigmoid",
+      "unweighted_logistic",
+      "unweighted_sigmoid"
+    ]
+  },
+  "rows": 10852,
+  "positives": 259,
+  "outer_cv": "5-fold 1km spatial blocks",
+  "inner_calibration": "3-fold spatial OOF margins; regularized sigmoid C=1e6",
+  "source_sha256": "637b8f51fdb5a69821e8e9c85315018626e61d0cc979b992d7df1ff52b69598f",
+  "limitations": [
+    "Model selection uses this CV; final candidate has no independent external holdout",
+    "No spatial buffer or temporal holdout",
+    "Hourly scores are scenario indices, not validated hourly probabilities"
+  ]
+}
