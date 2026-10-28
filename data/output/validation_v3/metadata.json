@@ -1,0 +1,116 @@
+{
+  "source_base_commit": "43fc9fff2f79067d6c086593d8bfb0a6245ef4a2",
+  "sampling": {
+    "seed": 42,
+    "attempts": 102,
+    "per_band": 20,
+    "counts": {
+      "short": 20,
+      "medium": 20,
+      "long": 20
+    }
+  },
+  "component": {
+    "graph_nodes": 7107,
+    "strong_components": 99,
+    "eligible_component_nodes": 6982
+  },
+  "hours": [
+    "10h",
+    "18h",
+    "22h"
+  ],
+  "scenarios": [
+    "S0",
+    "S1",
+    "S2"
+  ],
+  "methods": [
+    "fastest",
+    "legacy_lambda_0.5",
+    "legacy_lambda_1",
+    "budget_distance"
+  ],
+  "budget": {
+    "max_extra_ratio": 0.1,
+    "max_extra_seconds": 120.0
+  },
+  "max_labels": 100000,
+  "max_runtime_sec": 5.0,
+  "scheduled_trials": 540,
+  "recorded_rows": 2160,
+  "error_rows": 0,
+  "workers": 4,
+  "condition_timings": [
+    {
+      "hour": "10h",
+      "scenario": "S0",
+      "setup_sec": 0.5854083360000004
+    },
+    {
+      "hour": "10h",
+      "scenario": "S1",
+      "setup_sec": 0.47905193400038115
+    },
+    {
+      "hour": "10h",
+      "scenario": "S2",
+      "setup_sec": 0.6238763419996758
+    },
+    {
+      "hour": "18h",
+      "scenario": "S0",
+      "setup_sec": 0.45760270500068145
+    },
+    {
+      "hour": "18h",
+      "scenario": "S1",
+      "setup_sec": 0.5789818069997636
+    },
+    {
+      "hour": "18h",
+      "scenario": "S2",
+      "setup_sec": 0.49325793300067744
+    },
+    {
+      "hour": "22h",
+      "scenario": "S0",
+      "setup_sec": 0.5718632100006289
+    },
+    {
+      "hour": "22h",
+      "scenario": "S1",
+      "setup_sec": 0.5497731509994992
+    },
+    {
+      "hour": "22h",
+      "scenario": "S2",
+      "setup_sec": 0.4716705219998403
+    }
+  ],
+  "input_sha256": {
+    "edge_risk_score_no_vehicle.parquet": "f2ed23f1ae13fafe36df96c6cf2d92518ca1d429e5dde13a6f20e275adfcb081",
+    "04_osm_nodes_raw.parquet": "a90a565315060e94e6c51de38b801a2ffd3799839fb107766b0d2a12f6ccc31f"
+  },
+  "limits": [
+    "Model-based comparison, not external safety validation",
+    "Same OD pairs reused across conditions; rows are correlated",
+    "Equal counts per Euclidean distance band, not observed trip distribution",
+    "Largest strongly connected component only; other nodes excluded before sampling",
+    "Positive reduction means improvement; zero baseline gives an undefined ratio",
+    "New solver excludes turn/comfort penalties; times exclude waits and access legs",
+    "Per-query elapsed excludes shared graph preparation; legacy subgraph preparation is recorded separately",
+    "Search caps apply to the new solver only; feasible_limit is retained without claiming optimality"
+  ],
+  "process_start_method": "fork",
+  "runtime_versions": {
+    "python": "3.12.14",
+    "numpy": "2.3.5",
+    "pandas": "2.2.3",
+    "scipy": "1.17.0",
+    "geopandas": "1.2.0",
+    "shapely": "2.2.0",
+    "scikit-learn": "1.8.0",
+    "ortools": "9.15.6755"
+  }
+}
