@@ -1,0 +1,115 @@
+{
+  "scenario": "S1",
+  "hour": "18h",
+  "lambdas": [
+    0.0,
+    0.5,
+    1.0
+  ],
+  "coordinates": [
+    {
+      "case_id": "report1",
+      "start": [
+        127.0231433,
+        37.5072398
+      ],
+      "end": [
+        127.051217,
+        37.505447
+      ]
+    },
+    {
+      "case_id": "report2",
+      "start": [
+        127.0335,
+        37.4957
+      ],
+      "end": [
+        127.0625,
+        37.4969
+      ]
+    },
+    {
+      "case_id": "report3",
+      "start": [
+        127.0878769,
+        37.4917394
+      ],
+      "end": [
+        127.0666992,
+        37.5019139
+      ]
+    }
+  ],
+  "input_sha256": {
+    "edge_risk_score_no_vehicle.parquet": "f2ed23f1ae13fafe36df96c6cf2d92518ca1d429e5dde13a6f20e275adfcb081",
+    "04_osm_nodes_raw.parquet": "a90a565315060e94e6c51de38b801a2ffd3799839fb107766b0d2a12f6ccc31f"
+  },
+  "objective": "unchanged legacy objective, including lambda**0.72, comfort and turn penalties",
+  "limits": [
+    "Case 1 station name differs between presentation and repository cache",
+    "Case 2 uses coordinates embedded in repository reportfinal CSV",
+    "Not evidence of crash reduction; no new routing objective",
+    "Subgraph optimum; full graph fallback only on infeasibility",
+    "High-risk distance uses existing edge-level majority labels, not exact grid fragments"
+  ],
+  "diagnostics": [
+    {
+      "case_id": "report1",
+      "baseline_time_distance_m": 3014.046,
+      "baseline_risk_distance_m": 3407.47,
+      "subgraph_cutoff_m": 5631.952,
+      "corridor_path_count": 5,
+      "corridor_seed_node_count": 73,
+      "subgraph_node_count": 6127,
+      "subgraph_edge_count": 30753,
+      "full_graph_node_count": 7107,
+      "full_graph_edge_count": 35455,
+      "used_full_graph_fallback": false,
+      "scenario": "S1",
+      "start_snap_x": 957870.7414470252,
+      "start_snap_y": 1945428.705648914,
+      "end_snap_x": 960292.39296494,
+      "end_snap_y": 1945194.8434160305,
+      "unique_route_count": 3
+    },
+    {
+      "case_id": "report2",
+      "baseline_time_distance_m": 3517.872,
+      "baseline_risk_distance_m": 3641.813,
+      "subgraph_cutoff_m": 6006.901,
+      "corridor_path_count": 5,
+      "corridor_seed_node_count": 57,
+      "subgraph_node_count": 6646,
+      "subgraph_edge_count": 33268,
+      "full_graph_node_count": 7107,
+      "full_graph_edge_count": 35455,
+      "used_full_graph_fallback": false,
+      "scenario": "S1",
+      "start_snap_x": 958789.4259453319,
+      "start_snap_y": 1944131.034135677,
+      "end_snap_x": 961330.2907875302,
+      "end_snap_y": 1944297.4377989632,
+      "unique_route_count": 3
+    },
+    {
+      "case_id": "report3",
+      "baseline_time_distance_m": 3664.332,
+      "baseline_risk_distance_m": 4662.46,
+      "subgraph_cutoff_m": 7639.936,
+      "corridor_path_count": 5,
+      "corridor_seed_node_count": 52,
+      "subgraph_node_count": 7067,
+      "subgraph_edge_count": 35339,
+      "full_graph_node_count": 7107,
+      "full_graph_edge_count": 35455,
+      "used_full_graph_fallback": false,
+      "scenario": "S1",
+      "start_snap_x": 963569.9095100118,
+      "start_snap_y": 1943666.3794040827,
+      "end_snap_x": 961685.0375594157,
+      "end_snap_y": 1944862.7185872504,
+      "unique_route_count": 3
+    }
+  ]
+}
