@@ -231,11 +231,11 @@ def evaluate_model(
     y_pred = model.predict(X_scaled)
     y_prob = model.predict_proba(X_scaled)[:, 1]
 
-    log("\n=== 모델 성능 평가 (pedestrian_avg 기반, vehicle 제외) ===")
+    log("\n=== 학습 데이터 재대입 평가 (외부 검증 아님, derived RS 성능 아님) ===")
     log(classification_report(y, y_pred, target_names=["사고 없음", "사고 발생"]))
 
     auc = roc_auc_score(y, y_prob)
-    log(f"  AUC-ROC: {auc:.4f}")
+    log(f"  학습 데이터 AUC-ROC: {auc:.4f}")
 
     # 층화 k-fold 교차검증
     cv = StratifiedKFold(n_splits=CV_FOLDS, shuffle=True, random_state=42)
@@ -429,3 +429,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+

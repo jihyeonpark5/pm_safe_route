@@ -26,6 +26,7 @@ from matplotlib.lines import Line2D
 from ortools.graph.python import min_cost_flow
 from pyproj import Transformer
 from shapely.geometry import Point
+from route_metrics import exposure_comparison
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -1067,6 +1068,7 @@ def summarize_route(
     path_arc_count = len(result.path_arcs)
     return {
         "case_id": request.case_id,
+        **exposure_comparison(result.path_arcs, base_arcs),
         "case_name": request.name,
         "start": request.start_label,
         "end": request.end_label,
@@ -1545,3 +1547,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

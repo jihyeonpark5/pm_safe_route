@@ -2,6 +2,23 @@
 
 공유 전동킥보드의 시공간 위험도 정량화 및 안전 가중치 기반 최적 경로 추천 시스템
 
+## 위험 노출 지표 및 검증 개선
+
+거리·시간 기반 위험 노출, 실제 RS의 교차검증, 기존 3개 경로의 재계산 결과는
+[1차 검증 보고서](docs/validation_v1.md)에 정리했습니다.
+기존 RS 단순 합계 감소와 거리·시간 기준 노출 감소는 다를 수 있습니다.
+보고서에 제시된 회귀 AUC와 파생 RS 자체의 성능도 구분해야 합니다.
+
+```bash
+pip install -r requirements-validation.txt
+python scripts/14_validate_risk_score.py
+python scripts/15_compare_report_routes.py
+python -m pytest -q
+```
+
+기존 경로 탐색 CSV에는 `distance_exposure_m`, `time_exposure_sec`,
+`high_risk_distance_m` 등의 지표가 추가됩니다. 기존 경로 목적함수는 유지됩니다.
+
 ## 폴더 구조
 
 ```text
