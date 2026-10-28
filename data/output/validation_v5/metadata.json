@@ -1,0 +1,57 @@
+{
+  "source_base_commit": "ce6626c6c493f254aed281bb3966917d6787f0af",
+  "reference_sha256": {
+    "metadata.json": "c6484a16b46454041ef12c4de3e1ca5956bd3e2dca075b5573bf7c2224456292",
+    "sampled_pairs.csv": "de953c0396f1c03650df08d7893c75d9a3281aa65edfe118df637b1844e36a65",
+    "results.csv": "e0be88c2f226566c33d4cc1aa772624fc0b513005a9408c6115a6d99a181a9aa"
+  },
+  "input_sha256": {
+    "edge_risk_score_no_vehicle.parquet": "f2ed23f1ae13fafe36df96c6cf2d92518ca1d429e5dde13a6f20e275adfcb081",
+    "04_osm_nodes_raw.parquet": "a90a565315060e94e6c51de38b801a2ffd3799839fb107766b0d2a12f6ccc31f"
+  },
+  "budget": {
+    "max_extra_ratio": 0.1,
+    "max_extra_seconds": 120.0
+  },
+  "turn_profiles": [
+    0.0,
+    3.0,
+    6.0
+  ],
+  "profile_model": "<=30deg: 0; 90deg: configured seconds; >=150deg: twice configured seconds; linear between",
+  "turn_exposure_model": "turn delay * max(incoming RS, outgoing RS)/100",
+  "hours": [
+    "10h",
+    "18h",
+    "22h"
+  ],
+  "scenarios": [
+    "S0",
+    "S1",
+    "S2"
+  ],
+  "pair_count": 60,
+  "workers": 4,
+  "scheduled_trials": 1620,
+  "recorded_rows": 4860,
+  "error_rows": 0,
+  "max_labels": 100000,
+  "max_runtime_sec": 5.0,
+  "runtime_versions": {
+    "python": "3.12.14",
+    "numpy": "2.3.5",
+    "pandas": "2.2.3",
+    "scipy": "1.17.0",
+    "geopandas": "1.2.0",
+    "shapely": "2.2.0",
+    "ortools": "9.15.6755"
+  },
+  "limits": [
+    "Uncalibrated turn-delay assumptions, not observed travel times",
+    "Model exposure, not actual crash risk",
+    "No traffic-light timing, left/right asymmetry, acceleration or access-leg model",
+    "Turn-aware states may revisit physical nodes; repeated-node routes are reported",
+    "References and constraints use fastest route under each profile; cross-profile percentages use different baselines",
+    "Search limits can return feasible_limit; optimality must be checked separately"
+  ]
+}

@@ -1,0 +1,48 @@
+{
+  "version": "1.0.0",
+  "model": {
+    "model_candidate": "unweighted_sigmoid",
+    "model_sha256": "261ffb1db8064b8d2e48fb3f08d1a2183dd4f14e30dc6c5306c3423dd701f63d",
+    "input_sha256": {
+      "merged_grid_variables.parquet": "637b8f51fdb5a69821e8e9c85315018626e61d0cc979b992d7df1ff52b69598f",
+      "edge_risk_score_no_vehicle.parquet": "f2ed23f1ae13fafe36df96c6cf2d92518ca1d429e5dde13a6f20e275adfcb081",
+      "08_grid_road_map.parquet": "29b3d45d888019c0ca00aa32abc1919ee14dbcf5d29173238081e62850bb2814",
+      "04_osm_nodes_raw.parquet": "a90a565315060e94e6c51de38b801a2ffd3799839fb107766b0d2a12f6ccc31f"
+    },
+    "score_semantics": "Hour-specific scenario index; not validated hourly or per-trip accident probability",
+    "historical_probability_semantics": "Pooled historical grid accident presence, not hourly or per-trip accident probability",
+    "thresholds": [
+      1.6217308725521251,
+      2.98458046052463,
+      5.142119393513803
+    ],
+    "grids": 10852,
+    "edges": 18715,
+    "output_sha256": {
+      "grid_scores.parquet": "9c85f2dbab2b9de1a9d87473ed8ee1024594b0615ca32c0ded5e75079414245b",
+      "edge_scores.parquet": "b1607814a2235bb5226d99242caa169c1eb34897695b40bb62cf7626a606d1b5"
+    },
+    "limitations": [
+      "Grid score mapped by segment length; edge class by dominant mapped length",
+      "Hourly pedestrian substitution is unvalidated; calibration uses average pedestrian input",
+      "Missing scored segments raise an error"
+    ]
+  },
+  "pair_count": 60,
+  "pair_source_sha256": "2351d755e1d9503ac699c0484fe74faab041f0c6ceebba15d69f8bf7e20037d6",
+  "turn_seconds_at_90": 0.0,
+  "solver_options": {
+    "max_extra_ratio": 0.1,
+    "max_extra_seconds": 120.0,
+    "max_labels": 100000,
+    "max_runtime_sec": 5.0
+  },
+  "trials": 540,
+  "result_rows": 1080,
+  "errors": 0,
+  "limitations": [
+    "Internal model-based routing check, not external safety validation",
+    "New score scale differs from historical RS; percentages across models have different denominators",
+    "Hourly scenario indices are not validated hourly accident probabilities"
+  ]
+}

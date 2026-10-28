@@ -19,6 +19,8 @@ ENV/
 Thumbs.db
 .DS_Store
 .cache/
+artifacts/
+data/output/final/model/oof_predictions.csv
 
 # Build / test artifacts
 build/
@@ -33,3 +35,4 @@ data/raw/boundary/seoul_sig.dbf
 data/raw/boundary/seoul_sig.prj
 data/raw/boundary/seoul_sig.shp
 data/raw/boundary/seoul_sig.shx
+
