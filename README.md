@@ -2,6 +2,19 @@
 
 공유 전동킥보드의 시공간 위험도 정량화 및 안전 가중치 기반 최적 경로 추천 시스템
 
+## 회전 지연 민감도
+
+회전 지연과 대기 노출을 포함한 공동 제약 경로를 추가했습니다.
+[5차 분석](docs/validation_v5.md)은 90도 회전에 0초·3초·6초를 더하는 가정을 비교합니다.
+실측 회전시간으로 보정된 값은 아닙니다.
+
+```bash
+python scripts/16_compare_time_budget_routes.py --prevent-time-exposure-increase --turn-seconds-at-90 3 --output-dir data/output/turn_report_cases
+python scripts/20_validate_turn_delay.py
+```
+
+회전 지연을 포함한 최단시간 경로를 기준으로 시간·시간 노출 상한을 적용합니다.
+
 ## 거리·시간 위험 노출 공동 제약
 
 추가시간 상한과 함께 시간 기준 위험 노출도 최단시간 경로보다 늘어나지 않도록 하는

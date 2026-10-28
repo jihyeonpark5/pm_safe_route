@@ -17,9 +17,16 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input-dir", type=Path, default=ROOT / "data/output/validation_v3")
     parser.add_argument("--method", default="budget_distance")
+    parser.add_argument("--turn-seconds-at-90", type=float)
     args = parser.parse_args()
     summary = pd.read_csv(args.input_dir / "summary.csv")
     selected = summary.loc[summary.method.eq(args.method)].copy()
+    if "turn_seconds_at_90" in selected.columns:
+        if args.turn_seconds_at_90 is None:
+            parser.error("Choose --turn-seconds-at-90 for a turn-sensitivity summary")
+        selected = selected.loc[selected.turn_seconds_at_90.eq(args.turn_seconds_at_90)]
+    elif args.turn_seconds_at_90 is not None:
+        parser.error("Input summary has no turn-delay profiles")
     if selected.empty or selected.errors.ne(0).any() or selected.successful.eq(0).any():
         raise ValueError("Plot requires successful budget results; inspect errors before plotting")
     selected["time_worsened_pct"] = 100 * selected.time_exposure_worsened / (selected.successful-selected.undefined_time_ratios)
@@ -48,9 +55,13 @@ def main():
                 ax.text(col, row, f"{value:.1f}%", ha="center", va="center",
                         color="white" if value/upper > .65 else "#17202a", fontsize=13)
         ax.spines[["top", "right", "bottom", "left"]].set_visible(False)
-    fig.suptitle("Time-budget routing: improvement and tradeoff", fontsize=15)
+    title = "Time-budget routing: improvement and tradeoff"
+    if args.turn_seconds_at_90 is not None:
+        title += f" (90-degree turn: {args.turn_seconds_at_90:g}s assumed)"
+    fig.suptitle(title, fontsize=13 if args.turn_seconds_at_90 is not None else 15)
     fig.supxlabel("Same sampled OD pairs across conditions; model indices, not measured crash reduction", fontsize=9)
-    target = args.input_dir / "overview.svg"
+    filename = "overview.svg" if args.turn_seconds_at_90 is None else f"overview_turn_{args.turn_seconds_at_90:g}s.svg"
+    target = args.input_dir / filename
     fig.savefig(target, metadata={"Date": None})
     target.write_text("\n".join(line.rstrip() for line in target.read_text().splitlines())+"\n", encoding="utf-8")
     plt.close(fig)

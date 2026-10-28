@@ -122,7 +122,7 @@ def summarize_results(results):
                    distance_reduction_p10=float(finite.distance_exposure_m_reduction_vs_fastest.quantile(.1)),
                    time_exposure_reduction_mean=float(time_finite.time_exposure_sec_reduction_vs_fastest.mean()),
                    extra_time_sec_median=float(ok.extra_time_sec_vs_fastest.median()),
-                   solve_elapsed_sec_median=float(ok.solve_elapsed_sec.median()),
+                   solve_elapsed_sec_median=float(ok.solve_elapsed_sec.dropna().median()) if ok.solve_elapsed_sec.notna().any() else float("nan"),
                    solve_elapsed_sec_p95=float(ok.solve_elapsed_sec.quantile(.95)),
                    relative_gap_max=float(ok.relative_gap.max()))
         rows.append(row)

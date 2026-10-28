@@ -13,6 +13,7 @@ import pandas as pd
 
 from route_metrics import exposure_metrics
 from time_budget_routing import ExposureGraph, allowed_extra_time
+from turn_delay import TurnDelayProfile, valid_walk
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("report_cases", Path(__file__).with_name("15_compare_report_routes.py"))
@@ -27,13 +28,14 @@ def budget_options(mode, ratio, seconds):
                 max_extra_seconds=None if mode == "ratio" else seconds)
 
 
-def compare_request(edges, nodes, request, config, options, max_labels, max_runtime, prevent_time_exposure_increase=False):
+def compare_request(edges, nodes, request, config, options, max_labels, max_runtime, prevent_time_exposure_increase=False, turn_seconds_at_90=0.):
     start, start_snap, _ = route.nearest_node(nodes, request.start_lon_lat)
     end, end_snap, _ = route.nearest_node(nodes, request.end_lon_lat)
     arcs = route.build_arcs(route.prepare_edge_costs(edges, request, config.scenario))
-    graph = ExposureGraph(arcs)
+    graph = ExposureGraph(arcs, None if turn_seconds_at_90 == 0 else TurnDelayProfile(turn_seconds_at_90))
     fastest, fastest_time = graph.shortest_path(start, end, "time")
     fastest_metrics = exposure_metrics(fastest)
+    fastest_metrics.update(graph.path_metrics(fastest))
     budget_result = graph.solve(start, end, **options, max_labels=max_labels, max_runtime_sec=max_runtime,
                                 prevent_time_exposure_increase=prevent_time_exposure_increase)
     if start == end:
@@ -44,14 +46,18 @@ def compare_request(edges, nodes, request, config, options, max_labels, max_runt
     candidates += [(f"legacy_lambda_{value:g}", result.path_arcs, result.optimization_status, value)
                    for value, result in legacy.items()]
     budget_method = "budget_joint" if prevent_time_exposure_increase else "budget_distance"
+    if turn_seconds_at_90:
+        budget_method += "_turn"
     candidates.append((budget_method, budget_result.path_arcs, budget_result.status, None))
     rows, segments, features = [], [], []
     for method, path, status, lambda_value in candidates:
-        valid = (start == end and not path) or route.validate_solution_path(path, start, end)[0]
+        valid = valid_walk(path, start, end) if turn_seconds_at_90 else ((start == end and not path) or route.validate_solution_path(path, start, end)[0])
         if not valid:
             raise RuntimeError(f"Invalid {method} route for {request.case_id}")
         metrics = exposure_metrics(path)
-        seconds = sum(arc.time_sec for arc in path)
+        metrics.update(graph.path_metrics(path))
+        seconds = metrics.pop("travel_time_sec")
+        metrics.pop("distance_m")
         angles = [route.angle_difference_degrees(a.end_heading_deg, b.start_heading_deg)
                   for a, b in zip(path, path[1:])]
         row = dict(case_id=request.case_id, start=request.start_label, end=request.end_label,
@@ -102,6 +108,7 @@ def main():
     parser.add_argument("--max-labels", type=int, default=1_000_000)
     parser.add_argument("--max-runtime-sec", type=float, default=60)
     parser.add_argument("--prevent-time-exposure-increase", action="store_true")
+    parser.add_argument("--turn-seconds-at-90", type=float, default=0., help="Uncalibrated turn-delay assumption; 0 disables it")
     parser.add_argument("--scenario", choices=["S0", "S1", "S2"], default="S1")
     parser.add_argument("--hour", choices=["10h", "18h", "22h"], default="18h")
     parser.add_argument("--case-id", default="all")
@@ -109,6 +116,7 @@ def main():
     parser.add_argument("--end-coords", default="")
     parser.add_argument("--output-dir", type=Path, default=ROOT / "data/output/validation_v2")
     args = parser.parse_args()
+    TurnDelayProfile(args.turn_seconds_at_90)
     options = budget_options(args.budget_mode, args.max_extra_ratio, args.max_extra_seconds)
     allowed_extra_time(1, **options)  # Fail on invalid budgets before loading data.
     if bool(args.start_coords) != bool(args.end_coords):
@@ -126,7 +134,7 @@ def main():
     all_rows, all_segments, all_features, all_diagnostics = [], [], [], []
     for request in requests:
         rows, segments, features, diagnostics = compare_request(edges, nodes, request, config, options, args.max_labels, args.max_runtime_sec,
-                                                               args.prevent_time_exposure_increase)
+                                                               args.prevent_time_exposure_increase, args.turn_seconds_at_90)
         all_rows.extend(rows)
         all_segments.extend(segments)
         all_features.extend(features)
@@ -144,13 +152,15 @@ def main():
         "source_base_commit": "5a2f213b8a9a69ed96446ad33a6b63eca3e5a5a7",
         "objective": "minimize sum(RS/100 * edge_length_m) subject to total edge travel time <= budget",
         "prevent_time_exposure_increase": args.prevent_time_exposure_increase,
+        "turn_seconds_at_90": args.turn_seconds_at_90,
+        "turn_exposure_model": "delay * max(incoming RS, outgoing RS)/100",
         "budget_options": options, "budget_mode": args.budget_mode, "max_labels": args.max_labels,
         "max_runtime_sec": args.max_runtime_sec, "scenario": args.scenario, "hour": args.hour,
         "requests": [asdict(c) for c in requests], "diagnostics": all_diagnostics,
         "input_sha256": {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in (route.EDGE_RISK_PATH, route.NODES_PATH)},
         "limits": ["Model-based exposure reduction, not measured crash reduction",
-                   "Travel times exclude turn, signal, acceleration and access-leg delays",
-                   "New solver uses full directed graph without comfort or turn penalties",
+                   "Travel times include configured turn-delay assumptions; signals, acceleration and access legs excluded",
+                   "New solver uses full directed graph and optional turn delay, without legacy comfort cost",
                    "Existing edge scores and access filtering inherited without model change",
                    "Case 1 uses repository Nonhyeon coordinates despite presentation Sinnonhyeon label",
                    "Optimality tolerance 1e-9 exposure units; feasible_limit is not certified optimal",
