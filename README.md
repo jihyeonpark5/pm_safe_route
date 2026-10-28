@@ -2,6 +2,21 @@
 
 공유 전동킥보드의 시공간 위험도 정량화 및 안전 가중치 기반 최적 경로 추천 시스템
 
+## 추가시간 상한 기반 경로 추천
+
+최단시간보다 `min(10%, 120초)`까지만 더 걸리는 범위에서 거리 기준 위험 노출을
+최소화하는 전체 그래프 탐색을 추가했습니다.
+[2차 개선 결과 및 제약](docs/validation_v2.md)에 기존 λ 방식과의 비교를 정리했습니다.
+
+```bash
+pip install -r requirements-validation.txt
+python scripts/16_compare_time_budget_routes.py
+```
+
+3개 사례 또는 `--start-coords 경도,위도 --end-coords 경도,위도` 입력을 지원합니다.
+결과는 `data/output/validation_v2/`에 CSV·GeoJSON으로 저장됩니다.
+거리 기준 노출을 최소화하며, 시간 기준 노출의 동시 감소나 실제 사고 감소를 보장하는 값은 아닙니다.
+
 ## 위험 노출 지표 및 검증 개선
 
 거리·시간 기반 위험 노출, 실제 RS의 교차검증, 기존 3개 경로의 재계산 결과는
