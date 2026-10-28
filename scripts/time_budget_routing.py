@@ -1,6 +1,6 @@
 """Minimize additive distance exposure subject to a travel-time budget.
 
-Uses nondominated (time, exposure) labels on the complete directed graph.
+Uses nondominated (time, distance exposure, optional time exposure) labels.
 Reverse shortest-path bounds prune labels without discretizing time. A search
 limit returns a feasible incumbent and a lower bound, never a false optimum.
 Inputs must already encode allowed travel directions and road access.
@@ -31,6 +31,8 @@ class BudgetRoute:
     labels_generated: int
     labels_expanded: int
     elapsed_sec: float
+    time_exposure_sec: float = 0.0
+    max_time_exposure_sec: float | None = None
 
     @property
     def relative_gap(self):
@@ -46,6 +48,7 @@ class _Label:
     exposure: float
     parent: int | None
     arc_idx: int | None
+    time_exposure: float = 0.0
     active: bool = True
 
 
@@ -69,7 +72,7 @@ class ExposureGraph:
         self.arcs = list(arcs)
         self.outgoing = defaultdict(list)
         self.incoming = defaultdict(list)
-        self.seconds, self.exposure = [], []
+        self.seconds, self.exposure, self.time_exposure = [], [], []
         for index, arc in enumerate(self.arcs):
             seconds, length, rs = float(arc.time_sec), float(arc.length_m), float(arc.rs_value)
             if not all(math.isfinite(v) for v in (seconds, length, rs)):
@@ -78,6 +81,7 @@ class ExposureGraph:
                 raise ValueError("Require positive edge time, nonnegative length, and RS in [0,100]")
             self.seconds.append(seconds)
             self.exposure.append(length * rs / 100)
+            self.time_exposure.append(seconds * rs / 100)
             self.outgoing[arc.tail].append(index)
             self.incoming[arc.head].append(index)
 
@@ -126,7 +130,9 @@ class ExposureGraph:
         return distance
 
     def solve(self, start, end, *, max_extra_ratio=0.1, max_extra_seconds=120.0,
-              max_labels=1_000_000, max_runtime_sec=60.0):
+              max_labels=1_000_000, max_runtime_sec=60.0, prevent_time_exposure_increase=False):
+        if not isinstance(prevent_time_exposure_increase, bool):
+            raise ValueError("prevent_time_exposure_increase must be a boolean")
         if isinstance(max_labels, bool) or not isinstance(max_labels, int) or max_labels < 1:
             raise ValueError("max_labels must be a positive integer")
         if not math.isfinite(max_runtime_sec) or max_runtime_sec <= 0:
@@ -137,8 +143,11 @@ class ExposureGraph:
         best_path = fastest
         best_exposure = sum(float(a.length_m) * float(a.rs_value) / 100 for a in fastest)
         best_seconds = fastest_seconds
+        best_time_exposure = sum(float(a.time_sec)*float(a.rs_value)/100 for a in fastest)
+        time_exposure_budget = best_time_exposure if prevent_time_exposure_increase else None
         remaining_time = self._remaining(end, self.seconds)
         remaining_risk = self._remaining(end, self.exposure)
+        remaining_time_exposure = self._remaining(end, self.time_exposure) if prevent_time_exposure_increase else None
         labels = [_Label(start, 0.0, 0.0, None, None)]
         frontiers = defaultdict(list, {start: [0]})
         serial = itertools.count()
@@ -173,12 +182,17 @@ class ExposureGraph:
                 seconds = label.seconds + self.seconds[index]
                 if seconds + remaining_time.get(arc.head, math.inf) > budget + EPS:
                     continue
+                time_exposure = label.time_exposure + self.time_exposure[index]
+                if prevent_time_exposure_increase and time_exposure + remaining_time_exposure.get(arc.head, math.inf) > time_exposure_budget + EPS:
+                    continue
                 exposure = label.exposure + self.exposure[index]
                 lower_bound = exposure + remaining_risk.get(arc.head, math.inf)
                 if lower_bound >= best_exposure - EPS:
                     continue
                 frontier = frontiers[arc.head]
-                if any(labels[i].seconds <= seconds and labels[i].exposure <= exposure for i in frontier):
+                if any(labels[i].seconds <= seconds and labels[i].exposure <= exposure
+                       and (not prevent_time_exposure_increase or labels[i].time_exposure <= time_exposure)
+                       for i in frontier):
                     continue
                 if len(labels) >= max_labels:
                     stop_reason = "label_limit"
@@ -186,15 +200,16 @@ class ExposureGraph:
                 kept = []
                 for i in frontier:
                     old = labels[i]
-                    if seconds <= old.seconds and exposure <= old.exposure:
+                    if seconds <= old.seconds and exposure <= old.exposure and (not prevent_time_exposure_increase or time_exposure <= old.time_exposure):
                         old.active = False
                     else:
                         kept.append(i)
                 new_id = len(labels)
-                labels.append(_Label(arc.head, seconds, exposure, label_id, index))
+                labels.append(_Label(arc.head, seconds, exposure, label_id, index, time_exposure))
                 frontiers[arc.head] = kept + [new_id]
                 if arc.head == end:
                     best_exposure, best_seconds = exposure, seconds
+                    best_time_exposure = time_exposure
                     best_path = recover(new_id)
                 else:
                     heapq.heappush(queue, (lower_bound, seconds, next(serial), new_id))
@@ -204,4 +219,4 @@ class ExposureGraph:
         lower_bound = min(best_exposure, pending_bound, queue[0][0] if queue else math.inf) if limited else best_exposure
         return BudgetRoute(best_path, "feasible_limit" if limited else "optimal", stop_reason,
                            fastest_seconds, budget, best_seconds, best_exposure, lower_bound,
-                           len(labels), expanded, time.monotonic() - began)
+                           len(labels), expanded, time.monotonic() - began, best_time_exposure, time_exposure_budget)

@@ -16,9 +16,10 @@ ROOT = Path(__file__).resolve().parents[1]
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input-dir", type=Path, default=ROOT / "data/output/validation_v3")
+    parser.add_argument("--method", default="budget_distance")
     args = parser.parse_args()
     summary = pd.read_csv(args.input_dir / "summary.csv")
-    selected = summary.loc[summary.method.eq("budget_distance")].copy()
+    selected = summary.loc[summary.method.eq(args.method)].copy()
     if selected.empty or selected.errors.ne(0).any() or selected.successful.eq(0).any():
         raise ValueError("Plot requires successful budget results; inspect errors before plotting")
     selected["time_worsened_pct"] = 100 * selected.time_exposure_worsened / (selected.successful-selected.undefined_time_ratios)

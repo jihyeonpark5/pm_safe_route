@@ -2,6 +2,19 @@
 
 공유 전동킥보드의 시공간 위험도 정량화 및 안전 가중치 기반 최적 경로 추천 시스템
 
+## 거리·시간 위험 노출 공동 제약
+
+추가시간 상한과 함께 시간 기준 위험 노출도 최단시간 경로보다 늘어나지 않도록 하는
+옵션을 추가했습니다. [4차 개선 결과](docs/validation_v4.md)에 같은 540개 조건의 비교를 정리했습니다.
+
+```bash
+python scripts/16_compare_time_budget_routes.py --prevent-time-exposure-increase --output-dir data/output/joint_report_cases
+python scripts/19_compare_joint_exposure.py
+```
+
+공동 제약을 적용하려면 `--prevent-time-exposure-increase`를 지정합니다.
+기준 점수·속도에 대한 모델상 제약이며 실제 사고 감소를 보장하는 값은 아닙니다.
+
 ## 다수 출발·도착 및 조건별 비교 실험
 
 고정된 60개 출발·도착 쌍을 3개 시간대·3개 속도 시나리오에서 비교했습니다.

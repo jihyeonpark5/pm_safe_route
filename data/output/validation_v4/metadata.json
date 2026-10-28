@@ -1,0 +1,51 @@
+{
+  "source_base_commit": "964d9e438a2c2b355c440bbf10a49c587ee028a4",
+  "reference_sha256": {
+    "metadata.json": "cad30fd8a5c06d2bc810d3e61f8c7e7bfbc6b307a6905dd0e8d5da5de336ce96",
+    "sampled_pairs.csv": "2351d755e1d9503ac699c0484fe74faab041f0c6ceebba15d69f8bf7e20037d6",
+    "results.csv": "ec086d392b4ea6d8b7e55aa8dfb7546b1216092446bd032ef1f20b78d440c82b"
+  },
+  "input_sha256": {
+    "edge_risk_score_no_vehicle.parquet": "f2ed23f1ae13fafe36df96c6cf2d92518ca1d429e5dde13a6f20e275adfcb081",
+    "04_osm_nodes_raw.parquet": "a90a565315060e94e6c51de38b801a2ffd3799839fb107766b0d2a12f6ccc31f"
+  },
+  "budget": {
+    "max_extra_ratio": 0.1,
+    "max_extra_seconds": 120.0
+  },
+  "time_exposure_constraint": "sum(RS/100 * seconds) <= same-condition fastest route time exposure",
+  "hours": [
+    "10h",
+    "18h",
+    "22h"
+  ],
+  "scenarios": [
+    "S0",
+    "S1",
+    "S2"
+  ],
+  "pair_count": 60,
+  "scheduled_trials": 540,
+  "recorded_rows": 1620,
+  "error_rows": 0,
+  "max_labels": 100000,
+  "max_runtime_sec": 5.0,
+  "runtime_versions": {
+    "python": "3.12.14",
+    "numpy": "2.3.5",
+    "pandas": "2.2.3",
+    "scipy": "1.17.0",
+    "geopandas": "1.2.0",
+    "shapely": "2.2.0",
+    "ortools": "9.15.6755"
+  },
+  "limits": [
+    "Model-based comparison, not measured crash reduction",
+    "Same fixed, correlated OD sample as v3",
+    "Travel time excludes waits, turns, acceleration and access legs",
+    "Turn/comfort costs not in objective",
+    "Joint optimum minimizes distance exposure, not time exposure",
+    "Absolute feasibility tolerance 1e-9",
+    "Search limit returns a feasible incumbent and lower bound, not certified optimum"
+  ]
+}

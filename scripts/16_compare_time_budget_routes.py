@@ -27,14 +27,15 @@ def budget_options(mode, ratio, seconds):
                 max_extra_seconds=None if mode == "ratio" else seconds)
 
 
-def compare_request(edges, nodes, request, config, options, max_labels, max_runtime):
+def compare_request(edges, nodes, request, config, options, max_labels, max_runtime, prevent_time_exposure_increase=False):
     start, start_snap, _ = route.nearest_node(nodes, request.start_lon_lat)
     end, end_snap, _ = route.nearest_node(nodes, request.end_lon_lat)
     arcs = route.build_arcs(route.prepare_edge_costs(edges, request, config.scenario))
     graph = ExposureGraph(arcs)
     fastest, fastest_time = graph.shortest_path(start, end, "time")
     fastest_metrics = exposure_metrics(fastest)
-    budget_result = graph.solve(start, end, **options, max_labels=max_labels, max_runtime_sec=max_runtime)
+    budget_result = graph.solve(start, end, **options, max_labels=max_labels, max_runtime_sec=max_runtime,
+                                prevent_time_exposure_increase=prevent_time_exposure_increase)
     if start == end:
         legacy, legacy_diagnostics = {}, {"skipped": "same snapped endpoint"}
     else:
@@ -42,7 +43,8 @@ def compare_request(edges, nodes, request, config, options, max_labels, max_runt
     candidates = [("fastest", fastest, "optimal", None)]
     candidates += [(f"legacy_lambda_{value:g}", result.path_arcs, result.optimization_status, value)
                    for value, result in legacy.items()]
-    candidates.append(("budget_distance", budget_result.path_arcs, budget_result.status, None))
+    budget_method = "budget_joint" if prevent_time_exposure_increase else "budget_distance"
+    candidates.append((budget_method, budget_result.path_arcs, budget_result.status, None))
     rows, segments, features = [], [], []
     for method, path, status, lambda_value in candidates:
         valid = (start == end and not path) or route.validate_solution_path(path, start, end)[0]
@@ -56,6 +58,8 @@ def compare_request(edges, nodes, request, config, options, max_labels, max_runt
                    hour=request.hour, scenario=config.scenario, method=method, lambda_value=lambda_value,
                    solver_status=status, distance_m=sum(a.length_m for a in path), travel_time_sec=seconds,
                    time_budget_sec=budget_result.time_budget_sec, within_time_budget=seconds <= budget_result.time_budget_sec + 1e-9,
+                   time_exposure_reference_sec=fastest_metrics["time_exposure_sec"],
+                   within_time_exposure_reference=metrics["time_exposure_sec"] <= fastest_metrics["time_exposure_sec"]+1e-9,
                    extra_time_sec_vs_fastest=seconds-fastest_time,
                    extra_time_ratio_vs_fastest=seconds/fastest_time-1 if fastest_time else 0.0,
                    start_snap_m=start_snap, end_snap_m=end_snap, path_valid=valid,
@@ -66,13 +70,15 @@ def compare_request(edges, nodes, request, config, options, max_labels, max_runt
         for name in ("distance_exposure_m", "time_exposure_sec", "high_risk_distance_m"):
             baseline = fastest_metrics[name]
             row[name + "_reduction_vs_fastest"] = 1 - metrics[name]/baseline if baseline > 0 else float("nan")
-        if method == "budget_distance":
+        if method == budget_method:
             row.update(lower_bound_exposure_m=budget_result.lower_bound_exposure_m,
                        relative_gap=budget_result.relative_gap, stop_reason=budget_result.stop_reason,
                        labels_generated=budget_result.labels_generated, labels_expanded=budget_result.labels_expanded,
                        search_elapsed_sec=budget_result.elapsed_sec)
             if not row["within_time_budget"] or metrics["distance_exposure_m"] > fastest_metrics["distance_exposure_m"] + 1e-7:
                 raise AssertionError("Budget result violates feasibility or baseline exposure bound")
+            if prevent_time_exposure_increase and not row["within_time_exposure_reference"]:
+                raise AssertionError("Joint result violates the time-exposure constraint")
         rows.append(row)
         for order, arc in enumerate(path):
             segments.append(dict(case_id=request.case_id, method=method, order=order, edge_id=arc.edge_id,
@@ -95,6 +101,7 @@ def main():
     parser.add_argument("--max-extra-seconds", type=float, default=120)
     parser.add_argument("--max-labels", type=int, default=1_000_000)
     parser.add_argument("--max-runtime-sec", type=float, default=60)
+    parser.add_argument("--prevent-time-exposure-increase", action="store_true")
     parser.add_argument("--scenario", choices=["S0", "S1", "S2"], default="S1")
     parser.add_argument("--hour", choices=["10h", "18h", "22h"], default="18h")
     parser.add_argument("--case-id", default="all")
@@ -118,7 +125,8 @@ def main():
     edges, nodes = route.load_inputs()
     all_rows, all_segments, all_features, all_diagnostics = [], [], [], []
     for request in requests:
-        rows, segments, features, diagnostics = compare_request(edges, nodes, request, config, options, args.max_labels, args.max_runtime_sec)
+        rows, segments, features, diagnostics = compare_request(edges, nodes, request, config, options, args.max_labels, args.max_runtime_sec,
+                                                               args.prevent_time_exposure_increase)
         all_rows.extend(rows)
         all_segments.extend(segments)
         all_features.extend(features)
@@ -135,6 +143,7 @@ def main():
     metadata = {
         "source_base_commit": "5a2f213b8a9a69ed96446ad33a6b63eca3e5a5a7",
         "objective": "minimize sum(RS/100 * edge_length_m) subject to total edge travel time <= budget",
+        "prevent_time_exposure_increase": args.prevent_time_exposure_increase,
         "budget_options": options, "budget_mode": args.budget_mode, "max_labels": args.max_labels,
         "max_runtime_sec": args.max_runtime_sec, "scenario": args.scenario, "hour": args.hour,
         "requests": [asdict(c) for c in requests], "diagnostics": all_diagnostics,
